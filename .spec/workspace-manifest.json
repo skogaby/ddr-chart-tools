@@ -1,0 +1,87 @@
+{
+  "workspaceType": "standard",
+  "workspaceName": "ddr-chart-tools",
+  "packages": {
+    "ddr-chart-tools": {
+      "type": "cli",
+      "path": ".",
+      "buildSystem": "cargo",
+      "buildStatus": "skipped",
+      "language": "rust",
+      "llmReadiness": {
+        "readme": { "status": "quality", "path": "README.md" },
+        "steeringFiles": {
+          "product": { "status": "complete", "path": ".spec/steering/product.md" },
+          "tech": { "status": "complete", "path": ".spec/steering/tech.md" },
+          "structure": { "status": "complete", "path": ".spec/steering/structure.md" }
+        },
+        "status": "ready",
+        "lastChecked": "2026-04-22T15:35:00-07:00"
+      },
+      "referenceLinks": [],
+      "remediation": {
+        "created": [
+          "README.md",
+          ".spec/steering/product.md",
+          ".spec/steering/tech.md",
+          ".spec/steering/structure.md",
+          ".spec/steering/rust-cli-standards.md",
+          ".gitignore"
+        ],
+        "copied": [],
+        "researched": [
+          {
+            "file": "rust-cli-standards.md",
+            "sources": ["model-knowledge", "rust-community-conventions"]
+          }
+        ],
+        "skipped": [],
+        "remediatedDate": "2026-04-22T15:35:00-07:00"
+      }
+    }
+  },
+  "steeringIndex": {
+    "allReadmes": [
+      "README.md"
+    ],
+    "allSteeringFiles": [
+      ".spec/steering/agent-conventions.md",
+      ".spec/steering/product.md",
+      ".spec/steering/tech.md",
+      ".spec/steering/structure.md",
+      ".spec/steering/rust-cli-standards.md"
+    ]
+  },
+  "bootstrapDate": "2026-04-22T15:35:00-07:00",
+  "buildVerified": false,
+  "buildDate": null,
+  "llmReadinessSkipped": false,
+  "bootstrapSkips": {
+    "autosdeYaml": {
+      "skipped": true,
+      "reason": "user declined — hobby project, no Amazon-specific tooling"
+    },
+    "buildVerification": {
+      "skipped": true,
+      "reason": "greenfield project — no source code exists yet"
+    }
+  },
+  "selfLearning": {
+    "enabled": true,
+    "projectLearningsPath": ".spec/learnings",
+    "globalLearningsPath": "~/.kiro/learnings"
+  },
+  "features": {
+    "20260422-initial-deliverable": {
+      "primaryPackage": "ddr-chart-tools",
+      "workflowPath": ".spec/workflow/20260422-initial-deliverable",
+      "status": "in-progress",
+      "stage": "implementation",
+      "createdDate": "2026-04-22T16:29:24-07:00",
+      "parentSimId": null,
+      "childSimIds": {},
+      "pointsSpent": {},
+      "crUrl": null
+    }
+  }
+}

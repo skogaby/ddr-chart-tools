@@ -1,0 +1,29 @@
+[package]
+name = "ddr-chart-tools"
+version = "0.1.0"
+edition = "2021"
+description = "Convert song and chart assets between DDR arcade and StepMania 5 formats"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "ddr-chart-tools"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+lewton = "0.10"
+vorbis_rs = "0.5"
+
+[profile.release]
+lto = "thin"
+
+[dev-dependencies]
+tempfile = "3"
