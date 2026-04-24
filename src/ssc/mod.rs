@@ -86,6 +86,31 @@ pub fn parse(text: &str) -> Result<Song, SscError> {
 
         if let Some(draft) = current_chart.as_mut() {
             draft.apply(&tag, value)?;
+        } else if tag == "NOTES" && value.params.len() == 7 && current_chart.is_none() {
+            // SM-style `#NOTES:stepstype:desc:diff:meter:radar:notedata;`
+            // found at song level. Common in real-world .ssc files.
+            let style = match notes::parse_stepstype(value.param(1)) {
+                Ok(s) => s,
+                Err(SscError::UnsupportedStepsType(t)) => {
+                    log::warn!("skipping unsupported stepstype: {t}");
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let difficulty = match notes::parse_difficulty(value.param(3)) {
+                Ok(d) => d,
+                Err(SscError::EditChartSkipped) => {
+                    log::warn!("skipping Edit chart");
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let parsed_notes = notes::parse_notes_body(value.param(6), style)?;
+            song.charts.push(crate::model::Chart {
+                style,
+                difficulty,
+                notes: parsed_notes,
+            });
         } else {
             apply_song_tag(&mut song, &tag, value)?;
         }

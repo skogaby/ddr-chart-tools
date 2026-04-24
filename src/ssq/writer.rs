@@ -62,22 +62,18 @@ fn write_chunk_header(
     Ok(())
 }
 
-/// Convert a `Beat` to an integer measure-tick count. Fails if the
-/// beat's rational representation doesn't fall exactly on a measure-tick
-/// boundary (1024 ticks per beat).
+/// Convert a `Beat` to an integer measure-tick count (1024 ticks per
+/// beat). Rounds to nearest when the beat doesn't land exactly on a
+/// tick boundary (e.g. triplets at 1/3 beat = 341.33 ticks).
 fn beat_to_measure_ticks(beat: Beat) -> Result<i32, SsqError> {
     let r = beat.as_rational();
     let num = (r.num() as i128)
         .checked_mul(1024)
         .ok_or_else(|| SsqError::Write("overflow converting beat to measure ticks".to_string()))?;
     let den = r.den() as i128;
-    if num % den != 0 {
-        return Err(SsqError::NonIntegerBeat {
-            beat: r.num(),
-            beat_den: r.den(),
-        });
-    }
-    i32::try_from(num / den)
+    let half = if num >= 0 { den / 2 } else { -(den / 2) };
+    let rounded = (num + half) / den;
+    i32::try_from(rounded)
         .map_err(|_| SsqError::Write("measure-tick out of i32 range".to_string()))
 }
 

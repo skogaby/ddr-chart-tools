@@ -17,7 +17,8 @@ ddr-chart-tools/
 │   ├── steering/           # these files
 │   └── workflow/           # per-feature workflows
 ├── docs/
-│   └── ssq_format.md       # byte-level SSQ spec — authoritative reference for the SSQ parser
+│   ├── ssq_format.md       # byte-level SSQ spec — authoritative reference for the SSQ parser
+│   └── xsb_format.md       # byte-level XSB spec — authoritative reference for the XSB writer
 ├── src/
 │   ├── main.rs             # binary entry point; thin — calls into cli module
 │   ├── lib.rs              # library surface for integration tests
@@ -30,7 +31,7 @@ ddr-chart-tools/
 │   ├── ssc/                # SSC parse + write
 │   ├── sm/                 # SM parse only (never written)
 │   ├── xwb/                # XWB container parse + write, MS-ADPCM codec (adpcm/)
-│   ├── xsb/                # XSB template-based writer + template.bin
+│   ├── xsb/                # XSB from-scratch writer (header, sounds, hash, CRC)
 │   ├── wavm/               # WAVM decode (headerless XBOX-IMA ADPCM)
 │   ├── ogg/                # OGG Vorbis decode (lewton) + encode (vorbis_rs)
 │   └── util/               # cross-cutting helpers (byte readers, path pairing, logging)
@@ -78,7 +79,7 @@ ddr-chart-tools/
 | `ssc/` | SSC text parse + write | SM parsing (separate module), audio |
 | `sm/` | SM text parse only | any writing |
 | `xwb/` | XWB container parse + write, MS-ADPCM decode/encode (`adpcm/` submodule) | OGG concerns |
-| `xsb/` | XSB template-based writer (static template + name patching) | XWB, audio codec |
+| `xsb/` | XSB from-scratch writer (header, sound entries, cue hash table, CRC-16) | XWB, audio codec |
 | `wavm/` | WAVM decode (headerless XBOX-IMA ADPCM, fixed 2ch/44100Hz) | container parsing, other codecs |
 | `ogg/` | OGG Vorbis decode (lewton) + encode (vorbis_rs) | XWB concerns |
 | `util/` | pure helpers: byte readers, basename pairing, logging setup | anything domain-specific |
@@ -101,7 +102,7 @@ ddr-chart-tools/
 - **Don't put format-specific types in `model/`**. If something belongs only to SSQ, it goes in `ssq/`.
 - **Don't bypass the model layer**. A direct `src/ssq_to_ssc.rs` is wrong; always `ssq → model → ssc`.
 - **Don't add a file at repo root that isn't in the top-level layout above** without updating this document first.
-- **Don't edit `docs/ssq_format.md`** as part of implementation work — it's a reference document, not a living design artifact. If the format doc is wrong, that's a separate, explicit task.
+- **Don't edit `docs/ssq_format.md` or `docs/xsb_format.md`** as part of implementation work — they're reference documents, not living design artifacts. If the format doc is wrong, that's a separate, explicit task.
 
 ## Where to Find Things
 

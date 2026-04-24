@@ -28,7 +28,10 @@ const HEADER_SIZE: usize = 52;
 const SEGMENT_COUNT: usize = 5;
 const BANK_NAME_LEN: usize = 64;
 const ENTRY_META_SIZE: u32 = 24;
-const BANK_DATA_SIZE: usize = 92;
+/// Bank data is 96 bytes in XACT2 header_version 42 (DDR's format):
+/// flags(4) + count(4) + name(64) + meta_size(4) + name_size(4) +
+/// align(4) + compact(4) + build_time(8).
+const BANK_DATA_SIZE: usize = 96;
 
 // ---------------------------------------------------------------------------
 // Error
@@ -153,7 +156,8 @@ pub struct XwbBank {
     pub entry_name_element_size: u32,
     pub alignment: u32,
     pub compact_format: u32,
-    pub build_time: u32,
+    /// 64-bit build timestamp (XACT2 header_version 42 uses 8 bytes).
+    pub build_time: u64,
     pub entries: Vec<XwbEntry>,
 }
 
@@ -239,7 +243,9 @@ pub fn parse(bytes: &[u8]) -> Result<XwbBank, XwbError> {
     let entry_name_element_size = br.read_u32()?;
     let alignment = br.read_u32()?;
     let compact_format = br.read_u32()?;
-    let build_time = br.read_u32()?;
+    let build_time_lo = br.read_u32()?;
+    let build_time_hi = br.read_u32()?;
+    let build_time = (build_time_hi as u64) << 32 | build_time_lo as u64;
 
     // -- Segment 1: entry metadata --
     let seg1 = &bytes[seg_offset[1] as usize..][..seg_length[1] as usize];
@@ -331,7 +337,22 @@ pub fn write(bank: &XwbBank, out: &mut impl Write) -> Result<(), XwbError> {
     let seg2_off = seg1_off + seg1_len;
     let seg3_off = seg2_off + seg2_len;
     let seg4_off = round_up(seg3_off + seg3_len, align);
-    let seg4_len: usize = bank.entries.iter().map(|e| e.data.len()).sum();
+    // Compute aligned data offsets within the wave-data segment.
+    // Streaming wave banks align each entry's data start to the bank
+    // alignment boundary (typically 2048) for sector-aligned reads.
+    let mut data_offsets: Vec<usize> = Vec::with_capacity(bank.entries.len());
+    let mut data_cursor: usize = 0;
+    for entry in &bank.entries {
+        data_offsets.push(data_cursor);
+        data_cursor = round_up(data_cursor + entry.data.len(), align);
+    }
+    // Total wave-data segment size: last entry's offset + its data length
+    // (no trailing padding needed after the final entry).
+    let seg4_len: usize = if let Some(last) = bank.entries.last() {
+        data_offsets.last().unwrap_or(&0) + last.data.len()
+    } else {
+        0
+    };
 
     // -- Header --
     out.write_all(MAGIC)?;
@@ -359,15 +380,13 @@ pub fn write(bank: &XwbBank, out: &mut impl Write) -> Result<(), XwbError> {
     out.write_all(&bank.build_time.to_le_bytes())?;
 
     // -- Segment 1: entry metadata --
-    let mut data_cursor: u32 = 0;
-    for entry in &bank.entries {
+    for (entry, &doff) in bank.entries.iter().zip(&data_offsets) {
         out.write_all(&entry.flags_and_duration.to_le_bytes())?;
         out.write_all(&entry.format.packed().to_le_bytes())?;
-        out.write_all(&data_cursor.to_le_bytes())?;
+        out.write_all(&(doff as u32).to_le_bytes())?;
         out.write_all(&(entry.data.len() as u32).to_le_bytes())?;
         out.write_all(&entry.loop_start.to_le_bytes())?;
         out.write_all(&entry.loop_length.to_le_bytes())?;
-        data_cursor += entry.data.len() as u32;
     }
 
     // -- Segment 2: seek tables (empty) --
@@ -391,9 +410,14 @@ pub fn write(bank: &XwbBank, out: &mut impl Write) -> Result<(), XwbError> {
         out.write_all(&vec![0u8; pad_len])?;
     }
 
-    // -- Segment 4: wave data --
-    for entry in &bank.entries {
+    // -- Segment 4: wave data (with inter-entry alignment padding) --
+    let mut wave_cursor: usize = 0;
+    for (entry, &doff) in bank.entries.iter().zip(&data_offsets) {
+        if doff > wave_cursor {
+            out.write_all(&vec![0u8; doff - wave_cursor])?;
+        }
         out.write_all(&entry.data)?;
+        wave_cursor = doff + entry.data.len();
     }
 
     Ok(())
@@ -436,14 +460,26 @@ mod tests {
         let seg3_off = seg2_off; // seg2 is empty
         let align = if alignment == 0 { 1 } else { alignment } as usize;
         let seg4_off = round_up(seg3_off + seg3_len, align);
-        let total_data: usize = entries.iter().map(|(_, d, _)| d.len()).sum();
+
+        // Compute aligned data offsets within wave-data segment.
+        let mut data_offsets = Vec::with_capacity(entry_count);
+        let mut cursor: usize = 0;
+        for (_, data, _) in entries {
+            data_offsets.push(cursor);
+            cursor = round_up(cursor + data.len(), align);
+        }
+        let total_data: usize = if let Some((_, last, _)) = entries.last() {
+            data_offsets.last().unwrap_or(&0) + last.len()
+        } else {
+            0
+        };
 
         let mut buf = Vec::with_capacity(seg4_off + total_data);
 
         // Header
         buf.extend_from_slice(MAGIC);
         buf.extend_from_slice(&VERSION.to_le_bytes());
-        buf.extend_from_slice(&44u32.to_le_bytes()); // header_version
+        buf.extend_from_slice(&42u32.to_le_bytes()); // header_version
         for (off, len) in [
             (seg0_off, seg0_len),
             (seg1_off, seg1_len),
@@ -463,18 +499,16 @@ mod tests {
         buf.extend_from_slice(&entry_name_size.to_le_bytes());
         buf.extend_from_slice(&alignment.to_le_bytes());
         buf.extend_from_slice(&0u32.to_le_bytes()); // compact_format
-        buf.extend_from_slice(&0u32.to_le_bytes()); // build_time
+        buf.extend_from_slice(&0u64.to_le_bytes()); // build_time
 
         // Seg 1: entry metadata
-        let mut data_cursor = 0u32;
-        for (_, data, fmt) in entries {
+        for (i, (_, data, fmt)) in entries.iter().enumerate() {
             buf.extend_from_slice(&0u32.to_le_bytes()); // flags_and_duration
             buf.extend_from_slice(&fmt.packed().to_le_bytes());
-            buf.extend_from_slice(&data_cursor.to_le_bytes());
+            buf.extend_from_slice(&(data_offsets[i] as u32).to_le_bytes());
             buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
             buf.extend_from_slice(&0u32.to_le_bytes()); // loop_start
             buf.extend_from_slice(&0u32.to_le_bytes()); // loop_length
-            data_cursor += data.len() as u32;
         }
 
         // Seg 3: entry names
@@ -486,11 +520,12 @@ mod tests {
             buf.extend_from_slice(&nb);
         }
 
-        // Padding
+        // Padding to seg4
         buf.resize(seg4_off, 0);
 
-        // Seg 4: wave data
-        for (_, data, _) in entries {
+        // Seg 4: wave data (with inter-entry alignment padding)
+        for (i, (_, data, _)) in entries.iter().enumerate() {
+            buf.resize(seg4_off + data_offsets[i], 0);
             buf.extend_from_slice(data);
         }
 

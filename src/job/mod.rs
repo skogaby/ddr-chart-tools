@@ -93,8 +93,8 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
 
-    // SSQ — synthesize events and tempo pairs from the Song.
-    let events: Vec<SsqEvent> = Vec::new();
+    // SSQ — synthesize canonical events and tempo pairs from the Song.
+    let events = synthesize_events(&song);
     let raw_tempo_pairs: Vec<(i32, i32)> = Vec::new();
     let mut ssq_out = Vec::new();
     ssq::writer::write(&song, &events, &raw_tempo_pairs, &mut ssq_out)?;
@@ -328,23 +328,23 @@ fn build_xwb_bank(
             format: *fmt,
             data: data.to_vec(),
             loop_start: 0,
-            loop_length: 0,
+            loop_length: duration.saturating_sub(1) as u32,
             name_bytes,
         }
     };
 
     let preview_name = format!("{code}_s");
     XwbBank {
-        header_version: 44,
-        flags: 0,
+        header_version: 42,
+        flags: 0x0009_0001,
         name: bank_name,
         entry_name_element_size: 64,
         alignment: 2048,
         compact_format: 0,
         build_time: 0,
         entries: vec![
-            make_entry(code, main_data, main_duration),
             make_entry(&preview_name, preview_data, preview_duration),
+            make_entry(code, main_data, main_duration),
         ],
     }
 }
@@ -392,4 +392,42 @@ fn try_audio_passthrough(
     fs::copy(audio_path, xwb_out)?;
     fs::copy(&xsb_src, xsb_out)?;
     Ok(true)
+}
+
+/// Synthesize the canonical 6-event sequence (spec §4.4) from a Song's
+/// chart data. Needed for SM5→DDR where no source events exist.
+fn synthesize_events(song: &crate::model::Song) -> Vec<SsqEvent> {
+    use crate::model::NoteKind;
+
+    // Find the last note tick across all charts.
+    let last_tick: i32 = song
+        .charts
+        .iter()
+        .flat_map(|c| c.notes.iter())
+        .filter_map(|n| {
+            let beat_r = match n.kind {
+                NoteKind::HoldHead { length } => {
+                    n.beat.as_rational().add(&length.as_rational()).ok()?
+                }
+                _ => n.beat.as_rational(),
+            };
+            let num = (beat_r.num() as i128).checked_mul(1024)?;
+            let den = beat_r.den() as i128;
+            let half = if num >= 0 { den / 2 } else { -(den / 2) };
+            i32::try_from((num + half) / den).ok()
+        })
+        .max()
+        .unwrap_or(4096);
+
+    // Round up to next full measure (multiple of 4096).
+    let song_end = ((last_tick + 4095) / 4096) * 4096;
+
+    vec![
+        SsqEvent { tick: 0,                code: 1, arg: 4 },
+        SsqEvent { tick: 0,                code: 2, arg: 1 },
+        SsqEvent { tick: 4096,             code: 2, arg: 2 },
+        SsqEvent { tick: 4096,             code: 2, arg: 5 },
+        SsqEvent { tick: song_end - 4096,  code: 2, arg: 3 },
+        SsqEvent { tick: song_end,         code: 2, arg: 4 },
+    ]
 }

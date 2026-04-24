@@ -168,7 +168,9 @@ fn decode_row(
             '1' => {
                 tap_bits |= 1u8 << panel;
             }
-            '2' => {
+            '2' | '4' => {
+                // `2` = hold head, `4` = roll head. DDR has no rolls;
+                // treat both as holds. Tail (`3`) closes either.
                 tap_bits |= 1u8 << panel;
                 hold_heads_this_row.push(panel);
             }
@@ -191,13 +193,6 @@ fn decode_row(
                 notes[head_idx].kind = NoteKind::HoldHead {
                     length: Beat::from_rational(length),
                 };
-            }
-            '4' => {
-                return Err(SscError::UnsupportedRoll {
-                    measure: measure_idx,
-                    row: row_idx,
-                    panel: panel as u8,
-                });
             }
             'M' => {
                 // Unreachable: collect_mine_bits already returned Some
@@ -588,10 +583,11 @@ mod tests {
     }
 
     #[test]
-    fn roll_is_rejected() {
-        let body = "4000\n0000\n0000\n0000\n";
-        let err = parse_notes_body(body, Style::Single).unwrap_err();
-        assert!(matches!(err, SscError::UnsupportedRoll { .. }));
+    fn roll_treated_as_hold() {
+        let body = "4000\n0000\n0000\n3000\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(matches!(notes[0].kind, NoteKind::HoldHead { .. }));
     }
 
     #[test]
