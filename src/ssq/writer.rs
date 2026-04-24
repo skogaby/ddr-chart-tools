@@ -250,15 +250,17 @@ fn advance_seconds_ticks(
         .map_err(|e| SsqError::Write(format!("cumulative add: {e}")))
 }
 
+/// Round a Rational to the nearest i32 (half-away-from-zero).
+///
+/// Tempo synthesis from SM5 data often produces fractional seconds-ticks
+/// (e.g. BPM=168 → 2500/7 ticks per beat). Sub-tick rounding at
+/// TPS=1000 is ±0.5ms — well within acceptable precision.
 fn rational_to_i32(r: &Rational) -> Result<i32, SsqError> {
-    if r.den() != 1 {
-        return Err(SsqError::Write(format!(
-            "non-integer value {}/{}",
-            r.num(),
-            r.den()
-        )));
-    }
-    i32::try_from(r.num()).map_err(|_| SsqError::Write("i32 out of range".to_string()))
+    let num = r.num() as i128;
+    let den = r.den() as i128;
+    let half = if num >= 0 { den / 2 } else { -(den / 2) };
+    let rounded = (num + half) / den;
+    i32::try_from(rounded).map_err(|_| SsqError::Write("i32 out of range".to_string()))
 }
 
 fn write_events_chunk(events: &[SsqEvent], out: &mut impl Write) -> Result<(), SsqError> {

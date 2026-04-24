@@ -26,6 +26,8 @@ use crate::xwb::container::{WaveFormat, XwbBank, XwbEntry};
 
 /// Execute one conversion job.
 pub fn run_one(job: &Job) -> Result<(), Error> {
+    fs::create_dir_all(&job.output_dir)?;
+
     match (job.from, job.to) {
         (Format::Ddr, Format::Sm5) => ddr_to_sm5(job),
         (Format::Sm5, Format::Ddr) => sm5_to_ddr(job),
@@ -47,8 +49,8 @@ fn ddr_to_sm5(job: &Job) -> Result<(), Error> {
     let audio = xwb::parse_audio(&audio_bytes)?;
     result.song.audio = audio;
 
-    let ssc_path = output_path(&job.chart_in, "ssc");
-    let ogg_path = output_path(&job.chart_in, "ogg");
+    let ssc_path = output_path(&job.chart_in, "ssc", &job.output_dir);
+    let ogg_path = output_path(&job.chart_in, "ogg", &job.output_dir);
     check_overwrite(&ssc_path, job.overwrite)?;
     check_overwrite(&ogg_path, job.overwrite)?;
 
@@ -84,9 +86,9 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     song.audio = audio;
     song.tps = 1000;
 
-    let ssq_path = output_path(&job.chart_in, "ssq");
-    let xwb_path = output_path(&job.chart_in, "xwb");
-    let xsb_path = output_path(&job.chart_in, "xsb");
+    let ssq_path = output_path(&job.chart_in, "ssq", &job.output_dir);
+    let xwb_path = output_path(&job.chart_in, "xwb", &job.output_dir);
+    let xsb_path = output_path(&job.chart_in, "xsb", &job.output_dir);
     check_overwrite(&ssq_path, job.overwrite)?;
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
@@ -124,9 +126,9 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
 
     ssq_legacy::modernize::modernize(&mut result);
 
-    let ssq_path = output_path(&job.chart_in, "ssq");
-    let xwb_path = output_path(&job.chart_in, "xwb");
-    let xsb_path = output_path(&job.chart_in, "xsb");
+    let ssq_path = output_path(&job.chart_in, "ssq", &job.output_dir);
+    let xwb_path = output_path(&job.chart_in, "xwb", &job.output_dir);
+    let xsb_path = output_path(&job.chart_in, "xsb", &job.output_dir);
     check_overwrite(&ssq_path, job.overwrite)?;
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
@@ -175,8 +177,8 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     let audio = decode_legacy_audio(&audio_bytes)?;
     result.song.audio = audio;
 
-    let ssc_path = output_path(&job.chart_in, "ssc");
-    let ogg_path = output_path(&job.chart_in, "ogg");
+    let ssc_path = output_path(&job.chart_in, "ssc", &job.output_dir);
+    let ogg_path = output_path(&job.chart_in, "ogg", &job.output_dir);
     check_overwrite(&ssc_path, job.overwrite)?;
     check_overwrite(&ogg_path, job.overwrite)?;
 
@@ -197,9 +199,11 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
 // Helpers
 // -----------------------------------------------------------------------
 
-/// Derive output path: same directory and basename as `input`, new extension.
-fn output_path(input: &Path, ext: &str) -> PathBuf {
-    input.with_extension(ext)
+/// Derive output path: input's basename with new extension, placed in
+/// the job's output directory.
+fn output_path(input: &Path, ext: &str, output_dir: &Path) -> PathBuf {
+    let stem = input.file_stem().unwrap_or_default();
+    output_dir.join(Path::new(stem).with_extension(ext))
 }
 
 /// Fail if `path` exists and overwrite is not enabled.

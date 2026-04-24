@@ -107,17 +107,20 @@ impl Cli {
     /// Convert validated CLI args into a list of conversion jobs.
     pub fn into_jobs(self) -> Result<Vec<Job>, CliError> {
         if let (Some(chart), Some(audio)) = (self.chartfile, self.audiofile) {
+            let output_dir = PathBuf::from("output");
             return Ok(vec![Job {
                 from: self.from_format,
                 to: self.to_format,
                 chart_in: chart,
                 audio_in: audio,
                 overwrite: self.overwrite,
+                output_dir,
             }]);
         }
 
         // Batch mode.
         let dir = self.input_folder.as_ref().unwrap();
+        let output_dir = dir.join("output");
         let result = pair::find_pairs(dir, self.from_format)?;
 
         // Ambiguous files are hard errors per US-5.
@@ -142,6 +145,7 @@ impl Cli {
                 chart_in: chart,
                 audio_in: audio,
                 overwrite: self.overwrite,
+                output_dir: output_dir.clone(),
             })
             .collect();
 

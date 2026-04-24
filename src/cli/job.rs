@@ -45,4 +45,6 @@ pub struct Job {
     pub chart_in: PathBuf,
     pub audio_in: PathBuf,
     pub overwrite: bool,
+    /// Directory where output files are written.
+    pub output_dir: PathBuf,
 }
