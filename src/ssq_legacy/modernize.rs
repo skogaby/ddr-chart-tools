@@ -110,6 +110,21 @@ pub fn modernize(result: &mut SsqParseResult) {
         }
     }
 
+    // Shift every tempo_data value by -tempo_data[0] so the timeline
+    // begins at linear 0. The Ultramix convention is that `tempo_data[0]`
+    // is a small authoring-tool quirk that doesn't accurately describe
+    // the audio-time-of-chart-origin alignment; zeroing it out (rather
+    // than preserving / computing into audio_sync_offset_seconds)
+    // matches the convention DDR modders use when hand-processing these
+    // charts. Per-engine sync bias is applied separately via
+    // `--sync-offset-ms`.
+    let tds_shift = result.raw_tempo_pairs[0].1;
+    if tds_shift != 0 {
+        for pair in &mut result.raw_tempo_pairs {
+            pair.1 = pair.1.saturating_sub(tds_shift);
+        }
+    }
+
     // Recompute audio_sync_offset_seconds from the new raw_tempo_pairs[0].1
     // (which is now in seconds-ticks at MODERN_TPS).
     result.song.audio_sync_offset_seconds =
@@ -179,14 +194,14 @@ mod tests {
             bpm: Bpm::from_rational(Rational::from_integer(120)),
         }];
         modernize(&mut r);
-        // First pair shifted to (0, ?). -3 seconds-ticks at TPS=75
-        // rescales to -3 * 40/3 = -40 seconds-ticks at TPS=1000.
-        assert_eq!(r.raw_tempo_pairs[0], (0, -40));
-        // Second pair: tick 4096-(-4096) = 8192. tds 251 * 40/3 = 3346.67 → 3347 rounded.
-        assert_eq!(r.raw_tempo_pairs[1].0, 8192);
+        // metric-tick shift: -(-4096) = +4096 → (-4096, *) → (0, *), (4096, *) → (8192, *).
+        // linear-tick rescale: TPS 75 → 1000, factor 40/3. -3 × 40/3 = -40. 251 × 40/3 ≈ 3346.67 → 3347.
+        // Then tds_shift = -40 applied to every tds → [(0, 0), (8192, 3387)].
+        assert_eq!(r.raw_tempo_pairs[0], (0, 0));
+        assert_eq!(r.raw_tempo_pairs[1], (8192, 3387));
         // Semantic tempo segment start_beat shifted from -4 to 0.
         assert_eq!(r.song.tempo_segments[0].start_beat, Beat::zero());
-        // audio_sync_offset_seconds = -40/1000 = -0.040.
-        assert_eq!(r.song.audio_sync_offset_seconds, Rational::new(-40, 1000).unwrap());
+        // audio_sync_offset_seconds = 0 (zeroed by modernize).
+        assert_eq!(r.song.audio_sync_offset_seconds, Rational::zero());
     }
 }
