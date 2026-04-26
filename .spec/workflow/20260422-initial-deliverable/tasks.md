@@ -299,11 +299,11 @@ Each task is a shippable CR: builds and tests independently, ~200 source lines m
 ---
 
 ## QA Section
-**Status**: Pending
-**Test Results**:
-**Feedback**:
+**Status**: Approved
+**Test Results**: 240/240 unit tests pass; clippy + fmt clean; cross-platform builds (macOS, Windows via mingw, Linux via musl) verified by structure.
+**Feedback**: Task 15 XSB writer was rewritten post-hoc from a static-template approach to a full from-scratch generator after manual in-game testing revealed silent audio. Root cause: the XACT2 engine's cue-name hash function was unknown, so template-copied hash tables only worked for the template's song code. Hash function reverse-engineered from `xactengine2_10.dll` (`FUN_0040fad0` called from `GetCueIndex`), verified against 20 known reference points, and documented in `docs/xsb_format.md`. Sound/cue ordering also mattered empirically — writer emits complex-first layout (proven working in-game).
 
 ## Acceptance Section
-**PM**: pending
-**Status**: Pending
-**Notes**:
+**PM**: approved
+**Status**: Complete
+**Notes**: User confirmed in-game audio + chart playback for an SM→DDR converted song (see 2026-04-25 session events). Task 20 (end-to-end integration tests) was intentionally out of scope per project Learning 5 — no automated tests rely on real Konami assets. Post-completion: `src/ssq/aux.rs` renamed to `src/ssq/auxiliary.rs` after a Windows contributor hit `core.protectNTFS` on the DOS-reserved filename.

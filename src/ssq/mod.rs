@@ -12,7 +12,7 @@
 //! DDR→DDR round-trips) and metadata describing any auxiliary chunks
 //! dropped during parse.
 
-pub mod aux;
+pub mod auxiliary;
 pub mod chunk;
 pub mod events;
 pub mod steps;
@@ -24,7 +24,7 @@ use thiserror::Error;
 use crate::model::{AudioBuffer, PreviewSlice, Rational, Song, Stop, TempoSegment};
 use crate::util::io::{IoError, LeReader};
 
-use aux::AuxMeta;
+use auxiliary::AuxMeta;
 use chunk::{read_header, ChunkHeader};
 use events::SsqEvent;
 

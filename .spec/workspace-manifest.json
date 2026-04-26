@@ -75,8 +75,8 @@
     "20260422-initial-deliverable": {
       "primaryPackage": "ddr-chart-tools",
       "workflowPath": ".spec/workflow/20260422-initial-deliverable",
-      "status": "in-progress",
-      "stage": "implementation",
+      "status": "completed",
+      "stage": "done",
       "createdDate": "2026-04-22T16:29:24-07:00",
       "parentSimId": null,
       "childSimIds": {},
