@@ -134,11 +134,16 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
 
-    // Write modernized SSQ.
+    // Write modernized SSQ. Discard the source's events and synthesize
+    // the canonical 6-event sequence: Ultramix-era SSQs place event[3]
+    // (alt-start cue 0xF8) at a different tick than event[2] (chart
+    // start 0xFA), which DDR World rejects. Synthesizing from scratch
+    // matches the SM5→DDR path and produces the spec's canonical shape.
+    let events = synthesize_events(&result.song);
     let mut ssq_out = Vec::new();
     ssq::writer::write(
         &result.song,
-        &result.events,
+        &events,
         &result.raw_tempo_pairs,
         &mut ssq_out,
     )?;
