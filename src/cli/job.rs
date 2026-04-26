@@ -47,4 +47,7 @@ pub struct Job {
     pub overwrite: bool,
     /// Directory where output files are written.
     pub output_dir: PathBuf,
+    /// Milliseconds to add to the audio-sync offset. Applied on
+    /// `DDR_LEGACY` inputs during modernization.
+    pub sync_offset_ms: i32,
 }

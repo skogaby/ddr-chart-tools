@@ -17,17 +17,20 @@ ddr-chart-tools/
 │   ├── steering/           # these files
 │   └── workflow/           # per-feature workflows
 ├── docs/
-│   ├── ssq_format.md       # byte-level SSQ spec — authoritative reference for the SSQ parser
-│   └── xsb_format.md       # byte-level XSB spec — authoritative reference for the XSB writer
+│   ├── ssq_format.md                  # byte-level SSQ spec — authoritative reference for the SSQ parser
+│   ├── xsb_format.md                  # byte-level XSB spec — authoritative reference for the XSB writer
+│   └── ultramix_archive_formats.md    # byte-level x_data / .sng / .sif specs — authoritative reference for the Ultramix extractor
+├── scripts/
+│   └── extract_ultramix_xdata.py      # standalone Ultramix asset extractor (x_data bin + music .sng)
 ├── src/
 │   ├── main.rs             # binary entry point; thin — calls into cli module
 │   ├── lib.rs              # library surface for integration tests
 │   ├── error.rs            # top-level Error enum (wraps each module's typed error)
 │   ├── cli/                # arg parsing, validation, job planning
-│   ├── job/                # per-job orchestration (parse → model → write) + batch runner
+│   ├── job/                # per-job orchestration (parse → model → write) + batch runner; Ultramix .sif ingestion
 │   ├── model/              # format-independent types (Song, Chart, Note, …)
 │   ├── ssq/                # SSQ parse + write (modern DDR)
-│   ├── ssq_legacy/         # legacy SSQ modernization (tick rescale, aux-chunk drop)
+│   ├── ssq_legacy/         # legacy SSQ modernization (origin shift, tick rescale, aux-chunk drop)
 │   ├── ssc/                # SSC parse + write
 │   ├── sm/                 # SM parse only (never written)
 │   ├── xwb/                # XWB container parse + write, MS-ADPCM codec (adpcm/)
@@ -72,10 +75,10 @@ ddr-chart-tools/
 | Module | Owns | Does not own |
 |--------|------|--------------|
 | `cli/` | arg parsing, validation, translating CLI intent into a list of conversion jobs | file I/O, format parsing |
-| `job/` | per-job orchestration (dispatch, output paths, overwrite check), batch runner with per-file error recovery | CLI concerns, binary-level format details |
+| `job/` | per-job orchestration (dispatch, output paths, overwrite check, Ultramix `.sif` ingestion, sync-offset bias), batch runner with per-file error recovery | CLI concerns, binary-level format details |
 | `model/` | format-independent types and rules about valid combinations | any I/O, any format-specific encoding |
 | `ssq/` | modern SSQ parse + write, chunk types 1/2/3 only | SSC writing, audio |
-| `ssq_legacy/` | legacy SSQ modernization (tick rescale, aux-chunk drop) | writing SSQs (defers to `ssq/`) |
+| `ssq_legacy/` | legacy SSQ modernization (origin-shift normalization, TPS rescale, aux-chunk drop) | writing SSQs (defers to `ssq/`) |
 | `ssc/` | SSC text parse + write | SM parsing (separate module), audio |
 | `sm/` | SM text parse only | any writing |
 | `xwb/` | XWB container parse + write, MS-ADPCM decode/encode (`adpcm/` submodule) | OGG concerns |
@@ -83,6 +86,7 @@ ddr-chart-tools/
 | `wavm/` | WAVM decode (headerless XBOX-IMA ADPCM, fixed 2ch/44100Hz) | container parsing, other codecs |
 | `ogg/` | OGG Vorbis decode (lewton) + encode (vorbis_rs) | XWB concerns |
 | `util/` | pure helpers: byte readers, basename pairing, logging setup | anything domain-specific |
+| `scripts/` | standalone one-off tooling (Ultramix extractor, format-probe scripts) in Python | anything that belongs in the main Rust crate |
 
 ## Naming Conventions
 
@@ -102,7 +106,7 @@ ddr-chart-tools/
 - **Don't put format-specific types in `model/`**. If something belongs only to SSQ, it goes in `ssq/`.
 - **Don't bypass the model layer**. A direct `src/ssq_to_ssc.rs` is wrong; always `ssq → model → ssc`.
 - **Don't add a file at repo root that isn't in the top-level layout above** without updating this document first.
-- **Don't edit `docs/ssq_format.md` or `docs/xsb_format.md`** as part of implementation work — they're reference documents, not living design artifacts. If the format doc is wrong, that's a separate, explicit task.
+- **Don't edit `docs/ssq_format.md`, `docs/xsb_format.md`, or `docs/ultramix_archive_formats.md`** as part of implementation work — they're reference documents, not living design artifacts. If a format doc is wrong, that's a separate, explicit task.
 
 ## Where to Find Things
 
@@ -110,6 +114,8 @@ ddr-chart-tools/
 |----------|----------|
 | "How does the CLI parse args?" | `src/cli/` |
 | "What does an SSQ file look like on disk?" | `docs/ssq_format.md` |
+| "How is an Ultramix x_data bin / .sng / .sif laid out?" | `docs/ultramix_archive_formats.md` |
+| "How do I extract Ultramix assets?" | `scripts/extract_ultramix_xdata.py` |
 | "How is a chart represented in memory?" | `src/model/` |
 | "Why does conversion X exist?" | `README.md` (format matrix) and `src/cli/` (validation rules) |
 | "Why was crate Y chosen?" | the feature design doc that introduced it |

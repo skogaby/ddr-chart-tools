@@ -67,12 +67,16 @@ This tool has no external integrations. Everything is local file I/O. No network
 ## Common Technical Gotchas
 
 - **SSQ endianness and alignment**: little-endian throughout, all chunks dword-aligned, but the freeze-info block inside step chunks is 2-byte aligned. Don't assume everything is 4-byte aligned.
-- **SSQ TPS is per-file**: the tempo chunk's `param2` is the tick rate. Don't hardcode 1000.
+- **SSQ TPS is per-file**: the tempo chunk's `param2` is the tick rate. Don't hardcode 1000. Observed values are 1000, 150, and 75; any positive `u16` is legal.
+- **Legacy `time_offset[0]` is not always 0**: it encodes an origin-shift between the chart timeline and the audio-sync timeline. The parser accepts any value; modernization normalizes to 0 and rescales seconds-ticks accordingly.
 - **SSQ chunk lookup has two sentinels**: `length == 0` and `param2 == 0xFFFF` both terminate chunk scans. Writers must not emit either value spuriously.
 - **SM vs SSC parsing**: both use MSD-style `#TAG:VALUE;` syntax but SSC has per-chart timing sections that SM lacks. Don't assume an SM parser handles SSC or vice versa.
 - **XWB ADPCM ≠ standard IMA ADPCM**: Microsoft's XACT format uses a specific variant. Read the audio stream format from the wave bank entry header, don't assume.
+- **WAVM is headerless**: the format has no magic bytes or metadata block; channels and sample rate are fixed by convention (2ch, 44.1 kHz). Detection is by extension and file-length modulo block size.
 - **Note-type mapping across formats** (shocks, mines, freezes, rolls): each format encodes these differently. Mapping lives in `model/` with explicit fail-loud behavior when a source note type has no target representation.
 - **Floating-point BPM round-trips**: SSQ stores tempo as fixed-point tied to TPS; SSC stores it as decimal strings. Going DDR → SM5 → DDR can drift BPMs. Use consistent rounding and document the precision expected.
+- **TPS rescale drifts sub-millisecond**: modernizing TPS=75 to TPS=1000 (ratio 40/3) and TPS=150 to TPS=1000 (ratio 20/3) requires rounding non-multiples of 3. The rounded drift is well under human perception but not byte-exact.
+- **Per-target sync bias is real**: the same modernized chart can be ~50 ms out of sync across different engines (Ultramix on DDR World is a known +53 ms offender). Expose the correction as an additive bias, not a hidden constant.
 
 ## Build, Test, Run
 

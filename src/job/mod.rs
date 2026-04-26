@@ -125,6 +125,7 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     }
 
     ssq_legacy::modernize::modernize(&mut result);
+    apply_sync_offset(&mut result, job.sync_offset_ms);
 
     let ssq_path = output_path(&job.chart_in, "ssq", &job.output_dir);
     let xwb_path = output_path(&job.chart_in, "xwb", &job.output_dir);
@@ -173,6 +174,7 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     }
 
     ssq_legacy::modernize::modernize(&mut result);
+    apply_sync_offset(&mut result, job.sync_offset_ms);
 
     apply_ultramix_sif_if_present(&job.chart_in, &mut result.song);
 
@@ -197,14 +199,39 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     Ok(())
 }
 
+/// Add a user-specified sync offset (in milliseconds) to the post-modernize
+/// audio-sync state. Applied to both `audio_sync_offset_seconds` (consumed
+/// by the SSC writer as `#OFFSET`) and `raw_tempo_pairs[0].1` (consumed by
+/// the SSQ writer as `tempo_data[0]`). Modernize runs first, so `song.tps`
+/// is already 1000 and seconds-ticks are directly in milliseconds.
+fn apply_sync_offset(result: &mut crate::ssq::SsqParseResult, offset_ms: i32) {
+    if offset_ms == 0 {
+        return;
+    }
+    let offset_seconds = crate::model::Rational::new(offset_ms as i64, 1000)
+        .unwrap_or(crate::model::Rational::zero());
+    if let Ok(new) = result.song.audio_sync_offset_seconds.add(&offset_seconds) {
+        result.song.audio_sync_offset_seconds = new;
+    }
+    if let Some(pair) = result.raw_tempo_pairs.first_mut() {
+        pair.1 = pair.1.saturating_add(offset_ms);
+    }
+}
+
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
 
 /// Derive output path: input's basename with new extension, placed in
-/// the job's output directory.
+/// the job's output directory. For Ultramix inputs, strips the `_all`
+/// suffix (e.g. `abs2_all.ssq` → `abs2.ssc`) so output filenames match
+/// the canonical per-song ID the game uses to find assets.
 fn output_path(input: &Path, ext: &str, output_dir: &Path) -> PathBuf {
-    let stem = input.file_stem().unwrap_or_default();
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.strip_suffix("_all").unwrap_or(s))
+        .unwrap_or("");
     output_dir.join(Path::new(stem).with_extension(ext))
 }
 
@@ -259,10 +286,13 @@ fn apply_ultramix_sif_if_present(chart_path: &Path, song: &mut crate::model::Son
 }
 
 /// Derive a 4-char song code from the input chart's basename.
+/// For Ultramix inputs, strips the `_all` suffix first so the code is
+/// the canonical 4-char per-song ID (e.g. `abs2_all` → `abs2`).
 fn song_code(chart_path: &Path) -> String {
     let stem = chart_path
         .file_stem()
         .and_then(|s| s.to_str())
+        .map(|s| s.strip_suffix("_all").unwrap_or(s))
         .unwrap_or("song");
     let alnum: String = stem
         .chars()

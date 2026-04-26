@@ -55,6 +55,11 @@ pub struct Cli {
     #[arg(long, group = "input_mode")]
     pub input_folder: Option<PathBuf>,
 
+    /// Directory to write converted files into. Defaults to `./output`
+    /// in single-file mode and `<input-folder>/output` in batch mode.
+    #[arg(long)]
+    pub output_dir: Option<PathBuf>,
+
     /// Overwrite existing output files.
     #[arg(long, default_value_t = false)]
     pub overwrite: bool,
@@ -66,6 +71,14 @@ pub struct Cli {
     /// Suppress info-level output (keeps warn and error).
     #[arg(short, long, default_value_t = false)]
     pub quiet: bool,
+
+    /// Add this many milliseconds to the audio-sync offset. Positive
+    /// values shift the audio later relative to beat 0 (equivalent to
+    /// adding to `#OFFSET` in SSC / `tempo_data[0]` in SSQ). Use to
+    /// correct for consistent per-platform sync bias (e.g. Ultramix
+    /// charts on DDR World commonly need ~+53ms).
+    #[arg(long, allow_hyphen_values = true)]
+    pub sync_offset_ms: Option<i32>,
 }
 
 impl Cli {
@@ -106,8 +119,10 @@ impl Cli {
 
     /// Convert validated CLI args into a list of conversion jobs.
     pub fn into_jobs(self) -> Result<Vec<Job>, CliError> {
+        let sync_offset_ms = self.sync_offset_ms.unwrap_or(0);
+
         if let (Some(chart), Some(audio)) = (self.chartfile, self.audiofile) {
-            let output_dir = PathBuf::from("output");
+            let output_dir = self.output_dir.unwrap_or_else(|| PathBuf::from("output"));
             return Ok(vec![Job {
                 from: self.from_format,
                 to: self.to_format,
@@ -115,12 +130,13 @@ impl Cli {
                 audio_in: audio,
                 overwrite: self.overwrite,
                 output_dir,
+                sync_offset_ms,
             }]);
         }
 
         // Batch mode.
         let dir = self.input_folder.as_ref().unwrap();
-        let output_dir = dir.join("output");
+        let output_dir = self.output_dir.unwrap_or_else(|| dir.join("output"));
         let result = pair::find_pairs(dir, self.from_format)?;
 
         // Ambiguous files are hard errors per US-5.
@@ -146,6 +162,7 @@ impl Cli {
                 audio_in: audio,
                 overwrite: self.overwrite,
                 output_dir: output_dir.clone(),
+                sync_offset_ms,
             })
             .collect();
 

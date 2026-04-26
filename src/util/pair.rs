@@ -54,6 +54,14 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
         };
 
         if chart_exts.iter().any(|&ce| ce == ext) {
+            // Ultramix chart filenames use `{id}_all.ssq` while their
+            // audio siblings are `{id}.wavm`. Strip the `_all` suffix
+            // from chart stems before pairing so they match.
+            let stem = if matches!(format, Format::DdrLegacy) {
+                stem.strip_suffix("_all").map(str::to_string).unwrap_or(stem)
+            } else {
+                stem
+            };
             charts.entry(stem).or_insert(path);
         } else if audio_exts.iter().any(|&ae| ae == ext) {
             audio.entry(stem).or_default().push(path);
@@ -159,6 +167,24 @@ mod tests {
         let dir = setup_dir(&["foo.ssq", "foo.xwb"]);
         fs::create_dir(dir.path().join("subdir")).unwrap();
         let result = find_pairs(dir.path(), Format::Ddr).unwrap();
+        assert_eq!(result.pairs.len(), 1);
+    }
+
+    #[test]
+    fn legacy_pairs_ultramix_all_suffix_with_wavm() {
+        // Ultramix: abs2_all.ssq pairs with abs2.wavm.
+        let dir = setup_dir(&["abs2_all.ssq", "abs2.wavm"]);
+        let result = find_pairs(dir.path(), Format::DdrLegacy).unwrap();
+        assert_eq!(result.pairs.len(), 1);
+        assert!(result.unpaired_charts.is_empty());
+        assert!(result.unpaired_audio.is_empty());
+    }
+
+    #[test]
+    fn legacy_pairs_plain_stems_unchanged() {
+        // Non-Ultramix legacy pair still works with matching stems.
+        let dir = setup_dir(&["foo.ssq", "foo.wavm"]);
+        let result = find_pairs(dir.path(), Format::DdrLegacy).unwrap();
         assert_eq!(result.pairs.len(), 1);
     }
 }
