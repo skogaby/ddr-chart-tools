@@ -174,6 +174,8 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
 
     ssq_legacy::modernize::modernize(&mut result);
 
+    apply_ultramix_sif_if_present(&job.chart_in, &mut result.song);
+
     let audio = decode_legacy_audio(&audio_bytes)?;
     result.song.audio = audio;
 
@@ -216,6 +218,44 @@ fn check_overwrite(path: &Path, overwrite: bool) -> Result<(), Error> {
         .into());
     }
     Ok(())
+}
+
+/// Look for an Ultramix `.sif` file alongside the chart and populate
+/// `song.title` / `song.artist` from it.
+///
+/// Chart filenames are `{id}_all.ssq`; the sibling SIF is `{id}.sif`.
+/// The SIF is a sequence of null-terminated ASCII strings at fixed
+/// indices (see docs/ultramix_archive_formats.md):
+///   [0] empty leader, [1] short_id, [2] title, [3] subtitle, [4] artist.
+/// When a subtitle is present it's appended to the title with a space.
+fn apply_ultramix_sif_if_present(chart_path: &Path, song: &mut crate::model::Song) {
+    let Some(stem) = chart_path.file_stem().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let id = stem.strip_suffix("_all").unwrap_or(stem);
+    let sif_path = chart_path.with_file_name(format!("{id}.sif"));
+    let Ok(bytes) = fs::read(&sif_path) else {
+        return;
+    };
+    let fields: Vec<&str> = bytes
+        .split(|&b| b == 0)
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .collect();
+    // Field layout: [0]=empty leader, [1]=id, [2]=title, [3]=subtitle, [4]=artist.
+    let title = fields.get(2).copied().unwrap_or("");
+    let subtitle = fields.get(3).copied().unwrap_or("");
+    let artist = fields.get(4).copied().unwrap_or("");
+    if !title.is_empty() {
+        song.title = Some(if subtitle.is_empty() {
+            title.to_string()
+        } else {
+            format!("{title} {subtitle}")
+        });
+    }
+    if !artist.is_empty() {
+        song.artist = Some(artist.to_string());
+    }
+    info!("applied metadata from {}", sif_path.display());
 }
 
 /// Derive a 4-char song code from the input chart's basename.

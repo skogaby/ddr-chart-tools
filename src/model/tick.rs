@@ -1,9 +1,10 @@
 //! Integer rational rescaling of SSQ `tempo_data` values between TPS rates.
 //!
 //! `tempo_data` values in an SSQ tempo chunk are stored in "seconds-ticks"
-//! (`seconds × TPS`). Modernizing a legacy TPS=150 SSQ to TPS=1000 means
-//! multiplying these by `1000/150 = 20/3`. This module does that
-//! multiplication exactly and reports values that would require rounding.
+//! (`seconds × TPS`). Modernizing a legacy SSQ to TPS=1000 means multiplying
+//! these by `1000 / source_tps` (e.g., `20/3` for TPS=150, `40/3` for TPS=75).
+//! This module does that multiplication exactly and reports values that would
+//! require rounding.
 //!
 //! Note/tempo/event *measure-tick* positions are TPS-independent
 //! (4096 per measure regardless of TPS) and need no rescaling.

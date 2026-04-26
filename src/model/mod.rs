@@ -200,9 +200,10 @@ pub struct Stop {
 pub struct Song {
     pub title: Option<String>,
     pub artist: Option<String>,
-    /// SSQ tick rate: 150 (legacy-authored) or 1000 (modern-authored)
-    /// if the source was an SSQ. Set to 1000 when the source is SM5 or
-    /// after modernization. The writer emits this value verbatim.
+    /// SSQ tick rate from the source file (or 1000 for SM5 sources).
+    /// Dominant value for newly-authored charts is 1000; older charts use
+    /// lower rates (150 and 75 observed). Set to 1000 after modernization.
+    /// The writer emits this value verbatim.
     pub tps: u32,
     pub tempo_segments: Vec<TempoSegment>,
     pub stops: Vec<Stop>,

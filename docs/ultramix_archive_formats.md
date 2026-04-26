@@ -77,7 +77,7 @@ For Ultramix 1 US:
 |-----------|-------|------------|
 | `.tga`    | 249   | Uncompressed textures (32-bit BGRA) |
 | `.dds`    | 231   | Compressed textures |
-| `.ssq`    | 60    | Chart files (legacy DDR format, TPS=150) |
+| `.ssq`    | 60    | Chart files (legacy DDR format; TPS=75 or 150 per file) |
 | `.csv`    | 54    | Per-song background-animation stage direction |
 | `.sif`    | 51    | Per-song info (title, subtitle, artist) |
 | `.act`    | 33    | Animation curve data |
@@ -102,18 +102,20 @@ charts, documented on TCRF) or `_all_chris.ssq` (developer attribution).
 
 ## .sif — Song Info File
 
-Null-terminated strings packed back-to-back, zero-padded to a fixed size per
-file (varies, typically 512-1024 bytes). Fields observed in order:
+Null-terminated ASCII strings at fixed indices, padded with zero bytes to a
+fixed total size (typically 512-1024 bytes). The file begins with a single
+empty leader field; actual content starts at index 1:
 
 ```
-[0]  short ID      e.g. "abs2"
-[1]  title         e.g. "ABSOLUTE"
-[2]  subtitle      e.g. "Cuff -N- Stuff it Mix"
-[3]  artist        e.g. "Thuggie D."
-[4+] additional fields (difficulty level indicators? license class? not yet mapped)
+[0]  empty leader  (a single NUL byte)
+[1]  short ID      e.g. "abs2"
+[2]  title         e.g. "ABSOLUTE"
+[3]  subtitle      e.g. "Cuff -N- Stuff it Mix"  (may be empty)
+[4]  artist        e.g. "Thuggie D."
+[5+] trailing NUL padding to the file's fixed size
 ```
 
-The short ID in field [0] matches both the `.sif` filename prefix and the audio
+The short ID in field [1] matches both the `.sif` filename prefix and the audio
 tag in `music_US.sng`.
 
 ## music .sng Format

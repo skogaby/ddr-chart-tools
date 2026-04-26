@@ -35,9 +35,9 @@ pub fn parse_tempo_chunk(
             offset: chunk_offset,
         });
     }
-    if tps != 1000 && tps != 150 {
+    if tps != 1000 && tps != 150 && tps != 75 {
         log::warn!(
-            "unexpected TPS {tps} in tempo chunk at byte {chunk_offset} (expected 150 or 1000)"
+            "unusual TPS {tps} in tempo chunk at byte {chunk_offset} (known values: 75, 150, 1000)"
         );
     }
 
@@ -73,12 +73,16 @@ pub fn parse_tempo_chunk(
         tempo_data.push(reader.read_u32().map_err(SsqError::Io)? as i32);
     }
 
-    // Spec §3.1: time_offset[0] is always 0.
+    // Spec §3.1: time_offset[0] is 0 in TPS=1000 files. In legacy
+    // files it may be nonzero (origin-shift between the chart timeline
+    // and the audio-sync timeline). We accept any value and let the
+    // modernize step normalize to 0 for output.
     if time_offsets[0] != 0 {
-        return Err(SsqError::MalformedChunk {
-            offset: chunk_offset,
-            reason: format!("time_offset[0] must be 0, got {}", time_offsets[0]),
-        });
+        log::warn!(
+            "non-zero time_offset[0] = {} at byte {} (legacy origin-shift; will be normalized by modernize)",
+            time_offsets[0],
+            chunk_offset
+        );
     }
 
     // Spec §3.1: tempo_data[0] is the audio-sync offset in seconds-ticks.
@@ -105,16 +109,17 @@ pub fn parse_tempo_chunk(
                 at_beat,
                 duration_seconds,
             });
+        } else if delta_seconds_ticks == 0 {
+            // Legacy "instant advance" pair: measure advances while the
+            // audio clock stands still. Observed in some Ultramix charts
+            // (e.g. maxx_all.ssq has `(0,4) → (4096,4)` as its opening
+            // pair). The BPM formula in §3.2 would be undefined. Skip
+            // emitting a tempo segment for this pair — the next pair
+            // picks up the real tempo timeline.
+            log::warn!(
+                "tempo entry {i} at byte {chunk_offset}: measure advances by {delta_measure} ticks in zero seconds — skipping segment"
+            );
         } else {
-            // Spec §3.2: BPM = 240 * TPS * delta_measure / (4096 * delta_seconds_ticks)
-            if delta_seconds_ticks == 0 {
-                return Err(SsqError::MalformedChunk {
-                    offset: chunk_offset,
-                    reason: format!(
-                        "tempo entry {i} advances measure-ticks without advancing seconds-ticks"
-                    ),
-                });
-            }
             let num = 240i64
                 .checked_mul(i64::from(tps))
                 .and_then(|v| v.checked_mul(delta_measure))
@@ -253,10 +258,25 @@ mod tests {
     }
 
     #[test]
-    fn non_zero_first_time_offset_is_rejected() {
-        let (h, body) = build_tempo_chunk(1000, &[1, 4096], &[0, 2000]);
-        let err = parse_tempo_chunk(&h, &body, 0).unwrap_err();
-        assert!(matches!(err, SsqError::MalformedChunk { .. }));
+    fn non_zero_first_time_offset_is_accepted_as_legacy_origin_shift() {
+        // Ultramix-era charts commonly encode a negative or positive
+        // origin-shift in time_offset[0]. The parser must accept it
+        // (emits a warn); the modernize step normalizes it later.
+        let (h, body) = build_tempo_chunk(150, &[-4096, 4096], &[0, 300]);
+        let result = parse_tempo_chunk(&h, &body, 0).unwrap();
+        assert_eq!(result.tps, 150);
+        assert_eq!(result.raw_pairs, vec![(-4096, 0), (4096, 300)]);
+    }
+
+    #[test]
+    fn zero_delta_seconds_is_accepted_as_instant_advance() {
+        // Some Ultramix charts (e.g. maxx_all.ssq) have a tempo pair
+        // `(0, 4) → (4096, 4)` — measure advances while audio clock
+        // stands still. Parser must not crash; it skips the segment.
+        let (h, body) = build_tempo_chunk(150, &[0, 4096, 8192], &[4, 4, 1000]);
+        let result = parse_tempo_chunk(&h, &body, 0).unwrap();
+        // Only the second pair (4096 → 8192, 4 → 1000) produces a segment.
+        assert_eq!(result.tempo_segments.len(), 1);
     }
 
     #[test]

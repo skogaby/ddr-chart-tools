@@ -11,7 +11,7 @@ Reference specification for the SSQ step-file format used by DanceDanceRevolutio
 - **Magic**: None. The file is identified by extension (`.ssq`).
 - **Terminator**: A final `00 00 00 00` sentinel (read as "chunk length = 0"). Some files have additional trailing zero-byte padding; the game ignores it.
 - **Chunk types**: 1 (tempo), 2 (events), 3 (steps), 4 (effect data A), 5 (effect data B), 9 (metadata, rare), 17 (section markers).
-- **Ticks per second (TPS)**: **Not fixed.** Stored per-file in the tempo chunk's `param2`. Known values are `1000` (modern) and `150` (legacy).
+- **Ticks per second (TPS)**: **Not fixed.** Stored per-file in the tempo chunk's `param2`. `1000` is the dominant value in newly-authored charts; older charts use lower rates. Values of `1000`, `150`, and `75` have all been observed in the wild.
 - **Measure length**: 4096 ticks per measure (whole note), used by all tick-valued fields.
 
 File layout at the top level:
@@ -46,16 +46,20 @@ Ordering rules:
 
 The only **required** chunks for the step engine are tempo (1), events (2), and at least one step chunk (3). Everything else is optional.
 
-### 1.1 Two format generations
+### 1.1 Format variants
 
-SSQ files exist in two generations, distinguished by the tempo chunk's TPS value:
+Individual SSQ files vary along two axes: the tempo chunk's TPS value, and
+whether auxiliary chunks are present. These axes are independent — a file's
+TPS does not determine which chunks it contains.
 
-| TPS   | Generation | Auxiliary chunks allowed |
-|-------|------------|--------------------------|
-| 1000  | Modern     | Types 1/2/3 only         |
-| 150   | Legacy     | May include types 4, 5, 9, 17 |
+| Axis | Values seen | Notes |
+|------|-------------|-------|
+| TPS  | `1000`, `150`, `75` | `1000` is dominant in newly-authored charts; `150` and `75` appear in older charts. Files with TPS ≠ 1000 are referred to as **legacy** in this document. |
+| Chunks | Always types 1, 2, 3; optionally 4, 5, 9, 17 | Authoring tools targeting current DDR should emit only types 1, 2, 3. |
 
-The TPS=1000 format is a strict subset — modern files never contain auxiliary chunks, while legacy files may include effect, camera, section, and metadata chunks inherited from earlier DDR titles. Authoring tools targeting modern DDR should use TPS=1000 and emit only types 1, 2, 3.
+Authoring tools should use TPS=1000 and emit only the required chunk types.
+Parsers are expected to accept any positive TPS and any subset of chunk types
+without rejecting the file.
 
 ---
 
@@ -98,7 +102,7 @@ Exactly one per file. This is the authoritative source of both tempo changes and
 | Header field | Value / meaning                                        |
 |--------------|--------------------------------------------------------|
 | type         | `1`                                                    |
-| param2       | **Ticks per second (TPS)** — `150` or `1000`           |
+| param2       | **Ticks per second (TPS)** — any positive u16; `1000` is dominant, `150` and `75` also observed |
 | param3       | Number of tempo entries (N)                            |
 | param4       | `0`                                                    |
 
@@ -122,10 +126,30 @@ Exactly one per file. This is the authoritative source of both tempo changes and
 - `tempo_data[i]` — cumulative position in **seconds-ticks** (elapsed time × TPS) measured from the song's logical start.
 
 **Invariants**:
-- `time_offset[0]` is always `0`.
-- `tempo_data[0]` is an audio-sync offset in seconds-ticks (same unit as other `tempo_data[i]` values: `seconds × TPS`). In modern files (TPS=1000), values are tightly bounded to ±22 ms — a fine-tune audio-sync adjustment. In legacy files (TPS=150), positive values can reach several seconds, consistent with an audio pre-roll duration.
+- `time_offset[0]` is the origin-shift between the chart's measure timeline
+  and the audio-sync timeline. Sign and magnitude vary:
+  - In TPS=1000 files, it is always `0` — chart timeline and audio-sync
+    timeline share the same origin.
+  - In legacy files (TPS < 1000), it may be any i32. Negative values
+    (commonly `-4096`, `-8192`, `-12288`) indicate the chart timeline's
+    origin is shifted *later* than the audio-sync origin — i.e., the audio
+    has been playing for several beats before the chart's tick 0. Positive
+    values indicate the chart timeline starts *earlier*; the audio catches
+    up a few beats in. Values are typically whole-beat multiples of 1024,
+    but sub-beat values have been observed.
+- Chart content (step chunk `time_offset[i]`) is always `≥ 0`, even in
+  files whose tempo `time_offset[0]` is negative.
+- Event-chunk `time_offset[i]` mirrors tempo in sign: if tempo starts
+  negative, the event chunk's first timestamps may also be negative.
+- `tempo_data[0]` is an audio-sync offset in seconds-ticks (same unit as
+  other `tempo_data[i]` values: `seconds × TPS`). In TPS=1000 files it is
+  tightly bounded to ±22 ms — a fine-tune audio-sync adjustment. In legacy
+  files, values can reach several seconds, consistent with an audio pre-roll
+  duration.
 
-  A positive `tempo_data[0]` means the tempo-time axis starts partway through an audio pre-roll — by the time the chart reaches tick 0, `tempo_data[0] / TPS` seconds of audio time have already elapsed.
+  A positive `tempo_data[0]` means the tempo-time axis starts partway through
+  an audio pre-roll — by the time the chart reaches tick 0, `tempo_data[0] / TPS`
+  seconds of audio time have already elapsed.
 
 Total body size: `8N` bytes.
 Total chunk size: `12 + 8N` bytes (always a multiple of 4).
