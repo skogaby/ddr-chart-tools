@@ -62,3 +62,10 @@
 - **Scope**: project
 - **Source**: explicit
 - **Added**: 2026-04-23T09:28:20-07:00
+
+## Learning 11
+- **Context**: Writing the events (type-2 indicator) chunk in DDR SSQ output for legacy-to-DDR or SM5-to-DDR conversion
+- **Rule**: FINISH (icode=3) and any other control indicator that needs a valid `musicCount` must be placed at a tick strictly between two TIMING entries that the game's SsqReader walk actually consumes. The walk terminates on indicator exhaustion, so TIMING entries past the last consumed indicator are dropped. If FINISH sits past the last consumed TIMING, its `musicCount` stays at `INT32_MIN` after postprocessing, which (a) makes the results-screen guard fire instantly on STEP_FINISHED and (b) breaks the per-frame `lower_bound` lookup that maps audio-musicCount → beatCount — causing the game to lock in READY and never transition to gameplay. Fix: place END at the last tempo-pair tick (matching hand-authored reference charts), FINISH one measure before END, and synthesize a trailing tempo pair at `last_note + 2 measures` if the source doesn't already have one far enough out.
+- **Scope**: project
+- **Source**: implicit
+- **Added**: 2026-04-27T17:01:00-07:00

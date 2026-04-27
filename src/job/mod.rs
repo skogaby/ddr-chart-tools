@@ -94,8 +94,7 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     check_overwrite(&xsb_path, job.overwrite)?;
 
     // SSQ — synthesize canonical events and tempo pairs from the Song.
-    let events = synthesize_events(&song);
-    let raw_tempo_pairs: Vec<(i32, i32)> = Vec::new();
+    let (events, raw_tempo_pairs) = synthesize_events(&song, &[]);
     let mut ssq_out = Vec::new();
     ssq::writer::write(&song, &events, &raw_tempo_pairs, &mut ssq_out)?;
     fs::write(&ssq_path, &ssq_out)?;
@@ -139,12 +138,14 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     // (alt-start cue 0xF8) at a different tick than event[2] (chart
     // start 0xFA), which DDR World rejects. Synthesizing from scratch
     // matches the SM5→DDR path and produces the spec's canonical shape.
-    let events = synthesize_events(&result.song);
+    // `synthesize_events` also extends `raw_tempo_pairs` as needed to
+    // keep FINISH bracketed by TIMING notes (see its doc comment).
+    let (events, tempo_pairs) = synthesize_events(&result.song, &result.raw_tempo_pairs);
     let mut ssq_out = Vec::new();
     ssq::writer::write(
         &result.song,
         &events,
-        &result.raw_tempo_pairs,
+        &tempo_pairs,
         &mut ssq_out,
     )?;
     fs::write(&ssq_path, &ssq_out)?;
@@ -469,9 +470,31 @@ fn try_audio_passthrough(
     Ok(true)
 }
 
-/// Synthesize the canonical 6-event sequence (spec §4.4) from a Song's
-/// chart data. Needed for SM5→DDR where no source events exist.
-fn synthesize_events(song: &crate::model::Song) -> Vec<SsqEvent> {
+/// Synthesize the canonical 6-event sequence (spec §4.4) and return it
+/// alongside a tempo-pair list guaranteed to bracket FINISH.
+///
+/// The game (1) assigns a `musicCount` to each non-TIMING note by
+/// linearly interpolating between the surrounding TIMING notes and
+/// (2) uses `musicCount` to drive a per-frame beatCount lookup via
+/// `lower_bound` over the notes list. If FINISH sits past the last
+/// TIMING note in walk-order, it never gets a `musicCount` assigned
+/// (stays at `INT32_MIN`), which both (a) causes the results-screen
+/// guard to fire instantly on STEP_FINISHED and (b) leaves an
+/// out-of-order `musicCount` in the notes list — which breaks
+/// `lower_bound` and makes per-frame beatCount computation return
+/// garbage. That garbage manifests as the game locking at READY
+/// without ever transitioning to GO / gameplay.
+///
+/// To guarantee FINISH is bracketed by TIMING notes: the last tempo
+/// pair must sit at or past END's tick. Hand-authored reference
+/// charts place the trailing tempo pair at END's tick exactly. If the
+/// source's trailing tempo pair is already past FINISH+1 measure, we
+/// adopt its tick as END; otherwise we extrapolate a new trailing
+/// pair at `last_note + 2 measures` using the last segment's BPM.
+fn synthesize_events(
+    song: &crate::model::Song,
+    raw_tempo_pairs: &[(i32, i32)],
+) -> (Vec<SsqEvent>, Vec<(i32, i32)>) {
     use crate::model::NoteKind;
 
     // Find the last note tick across all charts.
@@ -494,23 +517,302 @@ fn synthesize_events(song: &crate::model::Song) -> Vec<SsqEvent> {
         .max()
         .unwrap_or(4096);
 
-    // FINISH (icode=3) controls when the game transitions from the
-    // playing state to the results screen. If FINISH sits at an earlier
-    // tick than the last note, the game cuts to results before the
-    // player sees the last notes get judged.
-    //
-    // Hand-authored reference charts place FINISH one measure after
-    // the last note and END one measure after FINISH.
     let last_measure = ((last_tick + 4095) / 4096) * 4096;
-    let finish_tick = last_measure + 4096;
-    let end_tick = finish_tick + 4096;
+    let desired_end = last_measure + 8192; // last note + 2 measures
 
-    vec![
+    // Build the tempo-pair list that goes into the SSQ. Invariant:
+    // the final pair's time_offset == end_tick, so END coincides with
+    // the trailing TIMING note and FINISH (one measure earlier) falls
+    // strictly inside the last real tempo bracket.
+    let source_last_tick = raw_tempo_pairs.last().map(|p| p.0).unwrap_or(0);
+    let end_tick = std::cmp::max(desired_end, source_last_tick);
+    let finish_tick = end_tick - 4096;
+
+    let tempo_pairs = if raw_tempo_pairs.is_empty() {
+        // SM5→DDR path: leave empty; the SSQ writer will synthesize
+        // from the Song's semantic view. Bracketing there is addressed
+        // separately if it becomes an issue.
+        Vec::new()
+    } else if source_last_tick >= end_tick {
+        raw_tempo_pairs.to_vec()
+    } else {
+        extend_tempo_pairs_to(raw_tempo_pairs, end_tick)
+    };
+
+    let events = vec![
         SsqEvent { tick: 0,           code: 1, arg: 4 },
         SsqEvent { tick: 0,           code: 2, arg: 1 },
         SsqEvent { tick: 4096,        code: 2, arg: 2 },
         SsqEvent { tick: 4096,        code: 2, arg: 5 },
         SsqEvent { tick: finish_tick, code: 2, arg: 3 },
         SsqEvent { tick: end_tick,    code: 2, arg: 4 },
-    ]
+    ];
+
+    (events, tempo_pairs)
+}
+
+/// Append a synthesized trailing tempo pair at `end_tick`, extrapolating
+/// seconds-ticks linearly from the last real tempo segment.
+fn extend_tempo_pairs_to(pairs: &[(i32, i32)], end_tick: i32) -> Vec<(i32, i32)> {
+    let mut out = pairs.to_vec();
+    let n = out.len();
+    if n < 2 {
+        // No segment to extrapolate from — fall back to "same seconds-tick"
+        // (degenerate, but non-crashing).
+        if let Some(last) = out.last().copied() {
+            out.push((end_tick, last.1));
+        }
+        return out;
+    }
+    let (t0, s0) = out[n - 2];
+    let (t1, s1) = out[n - 1];
+    let dt = (t1 - t0) as i64;
+    let ds = (s1 - s0) as i64;
+    // seconds-ticks per measure-tick in the last segment
+    let extra_ticks = (end_tick - t1) as i64;
+    let extra_seconds = if dt != 0 {
+        (ds * extra_ticks + dt / 2) / dt
+    } else {
+        0
+    };
+    let new_s = (s1 as i64 + extra_seconds).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    out.push((end_tick, new_s));
+    out
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        AudioBuffer, Beat, Chart, Difficulty, Note, NoteKind, PanelSet, PreviewSlice, Rational,
+        Song, Style,
+    };
+
+    /// Build a minimal Song with a single Single-Basic chart holding
+    /// one tap note at the given measure-tick position.
+    fn song_with_last_note_at(last_tick: i64) -> Song {
+        Song {
+            title: None,
+            artist: None,
+            tps: 1000,
+            tempo_segments: Vec::new(),
+            stops: Vec::new(),
+            charts: vec![Chart {
+                style: Style::Single,
+                difficulty: Difficulty::Basic,
+                notes: vec![Note {
+                    beat: Beat::from_measure_ticks(last_tick).unwrap(),
+                    kind: NoteKind::Tap,
+                    panels: PanelSet::from_bits(Style::Single, 0x01),
+                }],
+            }],
+            audio: AudioBuffer {
+                samples: Vec::new(),
+                sample_rate: 0,
+                channels: 0,
+            },
+            audio_sync_offset_seconds: Rational::zero(),
+            preview: PreviewSlice::default_window(),
+        }
+    }
+
+    /// Given synthesized events, extract (FINISH tick, END tick).
+    fn finish_and_end_ticks(events: &[SsqEvent]) -> (i32, i32) {
+        let finish = events
+            .iter()
+            .find(|e| e.code == 2 && e.arg == 3)
+            .expect("FINISH event missing");
+        let end = events
+            .iter()
+            .find(|e| e.code == 2 && e.arg == 4)
+            .expect("END event missing");
+        (finish.tick, end.tick)
+    }
+
+    #[test]
+    fn events_have_canonical_6_entry_shape() {
+        let song = song_with_last_note_at(232448); // beat 227
+        let (events, _) = synthesize_events(&song, &[]);
+        assert_eq!(events.len(), 6);
+        // MEASURE(4/4) at 0, READY at 0, GO at 4096, EDIT at 4096
+        assert_eq!(events[0], SsqEvent { tick: 0,    code: 1, arg: 4 });
+        assert_eq!(events[1], SsqEvent { tick: 0,    code: 2, arg: 1 });
+        assert_eq!(events[2], SsqEvent { tick: 4096, code: 2, arg: 2 });
+        assert_eq!(events[3], SsqEvent { tick: 4096, code: 2, arg: 5 });
+        // FINISH and END are tested separately.
+    }
+
+    #[test]
+    fn finish_sits_after_last_note_when_no_tempo_hint() {
+        // No source tempo pairs — the SM5 path. FINISH must still be
+        // strictly after the last note's measure boundary so the game
+        // doesn't cut to results before the last note is played.
+        let song = song_with_last_note_at(232448); // beat 227, last measure boundary = 233472
+        let (events, _) = synthesize_events(&song, &[]);
+        let (finish, end) = finish_and_end_ticks(&events);
+        assert!(finish > 232448, "FINISH must be past last note (got {finish})");
+        assert!(end > finish, "END must be past FINISH (got end={end}, finish={finish})");
+    }
+
+    #[test]
+    fn end_adopts_source_trailing_tempo_tick_when_far_enough() {
+        // Source has a trailing tempo entry past last note + 2 measures.
+        // After modernize, raw_tempo_pairs[-1].0 = 254976 (beat 249).
+        // last note = 232448 (beat 227). desired_end = 232448 + 8192 = 240640.
+        // Because source trailing tick 254976 > 240640, END adopts 254976.
+        let song = song_with_last_note_at(232448);
+        let raw_pairs = vec![
+            (0, 53),
+            (8192, 3387),
+            (135168, 55053),
+            (221184, 90053),
+            (225280, 91840),
+            (228352, 93053),
+            (232448, 94773),
+            (254976, 103747),
+        ];
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (finish, end) = finish_and_end_ticks(&events);
+        assert_eq!(end, 254976, "END should adopt the source trailing tempo tick");
+        assert_eq!(finish, end - 4096, "FINISH should be one measure before END");
+        // No new pair should have been appended — the source already had a sufficient guard.
+        assert_eq!(tempo_pairs, raw_pairs);
+    }
+
+    #[test]
+    fn appends_trailing_tempo_pair_when_source_ends_at_last_note() {
+        // Source's last tempo pair coincides with the last note.
+        // We must synthesize a new trailing entry past FINISH so FINISH gets
+        // bracketed by two consumed TIMING entries in the game's walk.
+        // Using last_note = 110592 (beat 108, measure-aligned) keeps the
+        // arithmetic simple: last_measure = 110592.
+        let song = song_with_last_note_at(110592); // beat 108, on measure boundary
+        // Source tempo: 120 BPM throughout, ending at the last note.
+        // 120 BPM, TPS=1000 → 500 seconds-ticks per beat.
+        // At beat 108 = 110592 measure-ticks, seconds-ticks = 108 * 500 = 54000.
+        let raw_pairs = vec![(0, 0), (110592, 54000)];
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (finish, end) = finish_and_end_ticks(&events);
+        // last_measure = 110592 (already measure-aligned)
+        // desired_end = 110592 + 8192 = 118784
+        // source trailing 110592 < 118784, so end_tick = 118784.
+        assert_eq!(end, 118784);
+        assert_eq!(finish, end - 4096);
+        // A new trailing tempo pair should have been appended at end_tick.
+        assert_eq!(tempo_pairs.len(), raw_pairs.len() + 1);
+        assert_eq!(tempo_pairs[tempo_pairs.len() - 1].0, 118784);
+        // Extrapolated seconds-ticks at 120 BPM: prior pair had 54000 at tick 110592.
+        // Over 8192 measure-ticks at 120 BPM, that's 4000 seconds-ticks.
+        // So new seconds-ticks = 54000 + 4000 = 58000.
+        assert_eq!(tempo_pairs[tempo_pairs.len() - 1].1, 58000);
+    }
+
+    #[test]
+    fn appends_trailing_tempo_pair_when_source_has_small_gap() {
+        // Source's last tempo pair is only 1 measure past the
+        // last note — not enough to bracket FINISH at last_note + 1 measure.
+        // Using measure-aligned last_note = 155648 (beat 152, 152/4 = 38 measures).
+        let song = song_with_last_note_at(155648); // beat 152
+        // Source tempo ending at beat 156 (last_note + 1 measure). 120 BPM.
+        // At tick 159744, seconds-ticks = 156 * 500 = 78000.
+        let raw_pairs = vec![(0, 0), (159744, 78000)];
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (finish, end) = finish_and_end_ticks(&events);
+        // last_measure = 155648 (already measure-aligned)
+        // desired_end = 155648 + 8192 = 163840
+        // source trailing 159744 < 163840, so end_tick = 163840.
+        assert_eq!(end, 163840);
+        assert_eq!(finish, end - 4096);
+        // A new trailing pair should have been appended.
+        assert_eq!(tempo_pairs.last().copied(), Some((163840, 80000)));
+    }
+
+    #[test]
+    fn finish_is_bracketed_by_two_tempo_entries_in_all_cases() {
+        // This is the critical invariant: regardless of where the source
+        // tempo ends, FINISH must sit strictly between two tempo ticks
+        // in the emitted tempo pairs so the game's musicCount
+        // interpolation assigns it a valid value.
+        let cases = [
+            // (last_note, raw_pairs)
+            (232448, vec![(0, 0), (254976, 100000)]), // source past desired end
+            (110592, vec![(0, 0), (110592, 54000)]),  // source at last note
+            (155648, vec![(0, 0), (159744, 78000)]),  // source with small gap
+            (4096, vec![(0, 0), (4096, 2000)]),       // very short song
+        ];
+        for (last_note, raw_pairs) in cases {
+            let song = song_with_last_note_at(last_note);
+            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+            let (finish, _) = finish_and_end_ticks(&events);
+            // Find the two tempo ticks that straddle FINISH.
+            let before = tempo_pairs
+                .iter()
+                .rev()
+                .find(|p| p.0 <= finish)
+                .map(|p| p.0);
+            let after = tempo_pairs.iter().find(|p| p.0 > finish).map(|p| p.0);
+            assert!(
+                before.is_some() && after.is_some(),
+                "FINISH at {finish} not bracketed for last_note={last_note}: before={before:?}, after={after:?}, pairs={tempo_pairs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn end_coincides_with_last_tempo_pair_tick() {
+        // The hand-authored reference pattern: END's tick matches the
+        // last tempo pair exactly. This produces the notes-vector shape
+        // where only END (and not FINISH) ends up with INT32_MIN
+        // musicCount after the game's postprocessing — matching known-
+        // working files.
+        let cases = [
+            (232448, vec![(0, 0), (254976, 100000)]),
+            (110592, vec![(0, 0), (110592, 54000)]),
+            (155648, vec![(0, 0), (159744, 78000)]),
+        ];
+        for (last_note, raw_pairs) in cases {
+            let song = song_with_last_note_at(last_note);
+            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+            let (_, end) = finish_and_end_ticks(&events);
+            assert_eq!(
+                end,
+                tempo_pairs.last().unwrap().0,
+                "END must equal last tempo tick for last_note={last_note}"
+            );
+        }
+    }
+
+    #[test]
+    fn extend_tempo_pairs_extrapolates_linearly_from_last_segment() {
+        // Last segment: (0, 0) → (1000, 500). Slope = 0.5 seconds-tick per tick.
+        // Extending to tick 1500 should produce (1500, 750).
+        let pairs = vec![(0, 0), (1000, 500)];
+        let out = extend_tempo_pairs_to(&pairs, 1500);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2], (1500, 750));
+    }
+
+    #[test]
+    fn extend_tempo_pairs_with_single_pair_falls_back_gracefully() {
+        // Only one pair — no segment to extrapolate from. Falls back to
+        // "same seconds-tick" (non-crashing degenerate case).
+        let pairs = vec![(0, 100)];
+        let out = extend_tempo_pairs_to(&pairs, 5000);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1], (5000, 100));
+    }
+
+    #[test]
+    fn synthesize_events_with_empty_song_handles_gracefully() {
+        // No notes — fallback last_tick is 4096 (per the .unwrap_or in
+        // synthesize_events). FINISH and END should still produce a valid
+        // event sequence and not panic.
+        let mut song = song_with_last_note_at(1024); // beat 1
+        song.charts[0].notes.clear();
+        let (events, _) = synthesize_events(&song, &[]);
+        assert_eq!(events.len(), 6);
+        let (finish, end) = finish_and_end_ticks(&events);
+        assert!(end > finish);
+    }
 }
