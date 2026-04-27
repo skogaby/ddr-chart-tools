@@ -494,15 +494,23 @@ fn synthesize_events(song: &crate::model::Song) -> Vec<SsqEvent> {
         .max()
         .unwrap_or(4096);
 
-    // Round up to next full measure (multiple of 4096).
-    let song_end = ((last_tick + 4095) / 4096) * 4096;
+    // FINISH (icode=3) controls when the game transitions from the
+    // playing state to the results screen. If FINISH sits at an earlier
+    // tick than the last note, the game cuts to results before the
+    // player sees the last notes get judged.
+    //
+    // Hand-authored reference charts place FINISH one measure after
+    // the last note and END one measure after FINISH.
+    let last_measure = ((last_tick + 4095) / 4096) * 4096;
+    let finish_tick = last_measure + 4096;
+    let end_tick = finish_tick + 4096;
 
     vec![
-        SsqEvent { tick: 0,                code: 1, arg: 4 },
-        SsqEvent { tick: 0,                code: 2, arg: 1 },
-        SsqEvent { tick: 4096,             code: 2, arg: 2 },
-        SsqEvent { tick: 4096,             code: 2, arg: 5 },
-        SsqEvent { tick: song_end - 4096,  code: 2, arg: 3 },
-        SsqEvent { tick: song_end,         code: 2, arg: 4 },
+        SsqEvent { tick: 0,           code: 1, arg: 4 },
+        SsqEvent { tick: 0,           code: 2, arg: 1 },
+        SsqEvent { tick: 4096,        code: 2, arg: 2 },
+        SsqEvent { tick: 4096,        code: 2, arg: 5 },
+        SsqEvent { tick: finish_tick, code: 2, arg: 3 },
+        SsqEvent { tick: end_tick,    code: 2, arg: 4 },
     ]
 }
