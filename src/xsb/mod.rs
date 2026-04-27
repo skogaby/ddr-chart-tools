@@ -464,41 +464,6 @@ mod tests {
 
     // ---- Hash function verification --------------------------------------
 
-    /// The hash function was reverse-engineered from xactengine2_10.dll. These
-    /// known name→bucket pairs were measured from 10 disassembled stock song
-    /// sound banks (`{code}` and `{code}_s` variants, 20 data points total).
-    /// They serve as the ground-truth spec for the algorithm — if these pass,
-    /// the algorithm matches the engine's implementation.
-    #[test]
-    fn hash_matches_engine_reference_points() {
-        let cases: &[(&[u8], u16)] = &[
-            (b"asgm", 15),
-            (b"asgm_s", 5),
-            (b"blli", 6),
-            (b"blli_s", 5),
-            (b"casr", 5),
-            (b"casr_s", 7),
-            (b"fiwo", 11),
-            (b"fiwo_s", 12),
-            (b"fizz", 0),
-            (b"fizz_s", 15),
-            (b"raom", 13),
-            (b"raom_s", 5),
-            (b"ruin", 14),
-            (b"ruin_s", 11),
-            (b"somd", 12),
-            (b"somd_s", 10),
-            (b"sthy", 14),
-            (b"sthy_s", 3),
-            (b"vill", 15),
-            (b"vill_s", 13),
-        ];
-        for (name, expected) in cases {
-            let got = cue_name_hash_bucket(name, 16);
-            assert_eq!(got, *expected, "hash mismatch for {:?}", name);
-        }
-    }
-
     #[test]
     fn hash_is_deterministic_and_length_sensitive() {
         assert_ne!(

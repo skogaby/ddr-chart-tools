@@ -104,7 +104,11 @@ fn write_tempo_chunk(
 /// SM5→DDR where no raw pairs are available). Requires at least one
 /// tempo segment. The trailing entry is synthesized at the maximum
 /// chart beat so BPM is derivable between every pair.
-fn synthesize_tempo_entries(song: &Song) -> Result<Vec<(i32, i32)>, SsqError> {
+///
+/// Callers that need to add extra trailing entries (e.g. a FINISH/END
+/// bracketing guard) should call this directly, extend the returned
+/// vec, and pass the result back into [`write`] as `raw_tempo_pairs`.
+pub fn synthesize_tempo_entries(song: &Song) -> Result<Vec<(i32, i32)>, SsqError> {
     if song.tempo_segments.is_empty() {
         return Err(SsqError::Write(
             "cannot synthesize tempo chunk: no tempo segments".to_string(),

@@ -93,10 +93,16 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
 
-    // SSQ — synthesize canonical events and tempo pairs from the Song.
-    let (events, raw_tempo_pairs) = synthesize_events(&song, &[]);
+    // SSQ — synthesize tempo pairs from the Song's semantic view first,
+    // then pass them through `synthesize_events` which ensures FINISH
+    // is bracketed by TIMING entries (see its doc comment). Without
+    // this, the writer's default tempo synthesis puts the trailing
+    // entry at the last-note beat, which leaves FINISH past the last
+    // consumed TIMING and locks the game at READY.
+    let initial_tempo_pairs = ssq::writer::synthesize_tempo_entries(&song)?;
+    let (events, tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs);
     let mut ssq_out = Vec::new();
-    ssq::writer::write(&song, &events, &raw_tempo_pairs, &mut ssq_out)?;
+    ssq::writer::write(&song, &events, &tempo_pairs, &mut ssq_out)?;
     fs::write(&ssq_path, &ssq_out)?;
     info!("wrote {}", ssq_path.display());
 
@@ -529,9 +535,9 @@ fn synthesize_events(
     let finish_tick = end_tick - 4096;
 
     let tempo_pairs = if raw_tempo_pairs.is_empty() {
-        // SM5→DDR path: leave empty; the SSQ writer will synthesize
-        // from the Song's semantic view. Bracketing there is addressed
-        // separately if it becomes an issue.
+        // Defensive fallback: no callers currently pass empty pairs
+        // (legacy_to_ddr has source pairs; sm5_to_ddr pre-synthesizes
+        // pairs before calling us). Kept for test-robustness.
         Vec::new()
     } else if source_last_tick >= end_tick {
         raw_tempo_pairs.to_vec()
@@ -814,5 +820,39 @@ mod tests {
         assert_eq!(events.len(), 6);
         let (finish, end) = finish_and_end_ticks(&events);
         assert!(end > finish);
+    }
+
+    #[test]
+    fn sm5_to_ddr_flow_brackets_finish_end_to_end() {
+        // SM5→DDR pre-synthesizes tempo pairs via
+        // `ssq::writer::synthesize_tempo_entries`, then feeds them into
+        // `synthesize_events`. The writer's synthesis places its
+        // trailing entry at the last-note beat, which without the
+        // job-layer extension would leave FINISH unbracketed. This test
+        // locks in the full end-to-end flow.
+        use crate::model::{Bpm, TempoSegment};
+        let mut song = song_with_last_note_at(2937856); // beat 2869
+        song.tempo_segments = vec![TempoSegment {
+            start_beat: Beat::zero(),
+            bpm: Bpm::from_rational(Rational::from_integer(200)),
+        }];
+
+        // Simulate the sm5_to_ddr job flow.
+        let initial_pairs = crate::ssq::writer::synthesize_tempo_entries(&song)
+            .expect("tempo synthesis should succeed with one segment");
+        // The writer puts the trailing entry at the last-note beat —
+        // same as the source of the original bug.
+        assert_eq!(initial_pairs.last().unwrap().0, 2937856);
+
+        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs);
+        let (finish, _) = finish_and_end_ticks(&events);
+
+        // Invariant: FINISH is strictly between two tempo entries.
+        let before = tempo_pairs.iter().rev().find(|p| p.0 <= finish).map(|p| p.0);
+        let after = tempo_pairs.iter().find(|p| p.0 > finish).map(|p| p.0);
+        assert!(
+            before.is_some() && after.is_some(),
+            "FINISH at {finish} not bracketed: before={before:?}, after={after:?}, pairs={tempo_pairs:?}"
+        );
     }
 }
