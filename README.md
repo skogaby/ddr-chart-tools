@@ -71,7 +71,7 @@ ddr-chart-tools \
     --sync-offset-ms 53
 ```
 
-Legacy-only chunks are dropped and logged. The output SSQs use the modern authoring conventions (TPS=1000, chunk types 1/2/3 only). The `time_offset[0]` origin-shift used by older charts (e.g. Ultramix) is normalized so the chart timeline begins at beat 0.
+Legacy-only chunks are dropped and logged. The output SSQs use the modern authoring conventions (TPS=1000, chunk types 1/2/3 plus — when the input carries them — 20 for mines). The `time_offset[0]` origin-shift used by older charts (e.g. Ultramix) is normalized so the chart timeline begins at beat 0.
 
 ### Sync Offset
 

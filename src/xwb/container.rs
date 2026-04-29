@@ -165,7 +165,11 @@ impl XwbBank {
     /// Bank name as a UTF-8 string (trimmed at first null).
     #[must_use]
     pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(BANK_NAME_LEN);
+        let end = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(BANK_NAME_LEN);
         std::str::from_utf8(&self.name[..end]).unwrap_or("")
     }
 }
@@ -187,7 +191,11 @@ impl XwbEntry {
     /// Entry name as a UTF-8 string (trimmed at first null).
     #[must_use]
     pub fn name_str(&self) -> &str {
-        let end = self.name_bytes.iter().position(|&b| b == 0).unwrap_or(self.name_bytes.len());
+        let end = self
+            .name_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.name_bytes.len());
         std::str::from_utf8(&self.name_bytes[..end]).unwrap_or("")
     }
 }
@@ -323,7 +331,11 @@ pub fn parse(bytes: &[u8]) -> Result<XwbBank, XwbError> {
 pub fn write(bank: &XwbBank, out: &mut impl Write) -> Result<(), XwbError> {
     let entry_count = bank.entries.len() as u32;
     let name_elem_size = bank.entry_name_element_size;
-    let align = if bank.alignment == 0 { 1 } else { bank.alignment } as usize;
+    let align = if bank.alignment == 0 {
+        1
+    } else {
+        bank.alignment
+    } as usize;
 
     // Compute segment sizes.
     let seg0_len = BANK_DATA_SIZE;

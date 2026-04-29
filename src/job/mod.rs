@@ -148,12 +148,7 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     // keep FINISH bracketed by TIMING notes (see its doc comment).
     let (events, tempo_pairs) = synthesize_events(&result.song, &result.raw_tempo_pairs);
     let mut ssq_out = Vec::new();
-    ssq::writer::write(
-        &result.song,
-        &events,
-        &tempo_pairs,
-        &mut ssq_out,
-    )?;
+    ssq::writer::write(&result.song, &events, &tempo_pairs, &mut ssq_out)?;
     fs::write(&ssq_path, &ssq_out)?;
     info!("wrote {}", ssq_path.display());
 
@@ -164,7 +159,13 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
         let audio = decode_legacy_audio(&audio_bytes)?;
         result.song.audio = audio;
         let code = song_code(&job.chart_in);
-        write_ddr_audio(&result.song.audio, &result.song.preview, &code, &xwb_path, &xsb_path)?;
+        write_ddr_audio(
+            &result.song.audio,
+            &result.song.preview,
+            &code,
+            &xwb_path,
+            &xsb_path,
+        )?;
     }
 
     Ok(())
@@ -383,17 +384,20 @@ fn slice_preview(audio: &AudioBuffer, preview: &PreviewSlice) -> Vec<i16> {
 }
 
 /// Build a DDR-compatible XwbBank with main + preview entries.
-fn build_xwb_bank(
-    code: &str,
-    fmt: &WaveFormat,
-    main_data: &[u8],
-    preview_data: &[u8],
-) -> XwbBank {
+fn build_xwb_bank(code: &str, fmt: &WaveFormat, main_data: &[u8], preview_data: &[u8]) -> XwbBank {
     let spb = fmt.samples_per_block() as usize;
     let ba = fmt.block_align() as usize;
 
-    let main_duration = if ba > 0 { (main_data.len() / ba) * spb } else { 0 };
-    let preview_duration = if ba > 0 { (preview_data.len() / ba) * spb } else { 0 };
+    let main_duration = if ba > 0 {
+        (main_data.len() / ba) * spb
+    } else {
+        0
+    };
+    let preview_duration = if ba > 0 {
+        (preview_data.len() / ba) * spb
+    } else {
+        0
+    };
 
     let mut bank_name = [0u8; 64];
     for (i, &b) in code.as_bytes().iter().enumerate().take(64) {
@@ -546,12 +550,36 @@ fn synthesize_events(
     };
 
     let events = vec![
-        SsqEvent { tick: 0,           code: 1, arg: 4 },
-        SsqEvent { tick: 0,           code: 2, arg: 1 },
-        SsqEvent { tick: 4096,        code: 2, arg: 2 },
-        SsqEvent { tick: 4096,        code: 2, arg: 5 },
-        SsqEvent { tick: finish_tick, code: 2, arg: 3 },
-        SsqEvent { tick: end_tick,    code: 2, arg: 4 },
+        SsqEvent {
+            tick: 0,
+            code: 1,
+            arg: 4,
+        },
+        SsqEvent {
+            tick: 0,
+            code: 2,
+            arg: 1,
+        },
+        SsqEvent {
+            tick: 4096,
+            code: 2,
+            arg: 2,
+        },
+        SsqEvent {
+            tick: 4096,
+            code: 2,
+            arg: 5,
+        },
+        SsqEvent {
+            tick: finish_tick,
+            code: 2,
+            arg: 3,
+        },
+        SsqEvent {
+            tick: end_tick,
+            code: 2,
+            arg: 4,
+        },
     ];
 
     (events, tempo_pairs)
@@ -585,7 +613,6 @@ fn extend_tempo_pairs_to(pairs: &[(i32, i32)], end_tick: i32) -> Vec<(i32, i32)>
     out.push((end_tick, new_s));
     out
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -642,10 +669,38 @@ mod tests {
         let (events, _) = synthesize_events(&song, &[]);
         assert_eq!(events.len(), 6);
         // MEASURE(4/4) at 0, READY at 0, GO at 4096, EDIT at 4096
-        assert_eq!(events[0], SsqEvent { tick: 0,    code: 1, arg: 4 });
-        assert_eq!(events[1], SsqEvent { tick: 0,    code: 2, arg: 1 });
-        assert_eq!(events[2], SsqEvent { tick: 4096, code: 2, arg: 2 });
-        assert_eq!(events[3], SsqEvent { tick: 4096, code: 2, arg: 5 });
+        assert_eq!(
+            events[0],
+            SsqEvent {
+                tick: 0,
+                code: 1,
+                arg: 4
+            }
+        );
+        assert_eq!(
+            events[1],
+            SsqEvent {
+                tick: 0,
+                code: 2,
+                arg: 1
+            }
+        );
+        assert_eq!(
+            events[2],
+            SsqEvent {
+                tick: 4096,
+                code: 2,
+                arg: 2
+            }
+        );
+        assert_eq!(
+            events[3],
+            SsqEvent {
+                tick: 4096,
+                code: 2,
+                arg: 5
+            }
+        );
         // FINISH and END are tested separately.
     }
 
@@ -657,8 +712,14 @@ mod tests {
         let song = song_with_last_note_at(232448); // beat 227, last measure boundary = 233472
         let (events, _) = synthesize_events(&song, &[]);
         let (finish, end) = finish_and_end_ticks(&events);
-        assert!(finish > 232448, "FINISH must be past last note (got {finish})");
-        assert!(end > finish, "END must be past FINISH (got end={end}, finish={finish})");
+        assert!(
+            finish > 232448,
+            "FINISH must be past last note (got {finish})"
+        );
+        assert!(
+            end > finish,
+            "END must be past FINISH (got end={end}, finish={finish})"
+        );
     }
 
     #[test]
@@ -680,8 +741,15 @@ mod tests {
         ];
         let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
         let (finish, end) = finish_and_end_ticks(&events);
-        assert_eq!(end, 254976, "END should adopt the source trailing tempo tick");
-        assert_eq!(finish, end - 4096, "FINISH should be one measure before END");
+        assert_eq!(
+            end, 254976,
+            "END should adopt the source trailing tempo tick"
+        );
+        assert_eq!(
+            finish,
+            end - 4096,
+            "FINISH should be one measure before END"
+        );
         // No new pair should have been appended — the source already had a sufficient guard.
         assert_eq!(tempo_pairs, raw_pairs);
     }
@@ -694,9 +762,9 @@ mod tests {
         // Using last_note = 110592 (beat 108, measure-aligned) keeps the
         // arithmetic simple: last_measure = 110592.
         let song = song_with_last_note_at(110592); // beat 108, on measure boundary
-        // Source tempo: 120 BPM throughout, ending at the last note.
-        // 120 BPM, TPS=1000 → 500 seconds-ticks per beat.
-        // At beat 108 = 110592 measure-ticks, seconds-ticks = 108 * 500 = 54000.
+                                                   // Source tempo: 120 BPM throughout, ending at the last note.
+                                                   // 120 BPM, TPS=1000 → 500 seconds-ticks per beat.
+                                                   // At beat 108 = 110592 measure-ticks, seconds-ticks = 108 * 500 = 54000.
         let raw_pairs = vec![(0, 0), (110592, 54000)];
         let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
         let (finish, end) = finish_and_end_ticks(&events);
@@ -720,8 +788,8 @@ mod tests {
         // last note — not enough to bracket FINISH at last_note + 1 measure.
         // Using measure-aligned last_note = 155648 (beat 152, 152/4 = 38 measures).
         let song = song_with_last_note_at(155648); // beat 152
-        // Source tempo ending at beat 156 (last_note + 1 measure). 120 BPM.
-        // At tick 159744, seconds-ticks = 156 * 500 = 78000.
+                                                   // Source tempo ending at beat 156 (last_note + 1 measure). 120 BPM.
+                                                   // At tick 159744, seconds-ticks = 156 * 500 = 78000.
         let raw_pairs = vec![(0, 0), (159744, 78000)];
         let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
         let (finish, end) = finish_and_end_ticks(&events);
@@ -848,11 +916,87 @@ mod tests {
         let (finish, _) = finish_and_end_ticks(&events);
 
         // Invariant: FINISH is strictly between two tempo entries.
-        let before = tempo_pairs.iter().rev().find(|p| p.0 <= finish).map(|p| p.0);
+        let before = tempo_pairs
+            .iter()
+            .rev()
+            .find(|p| p.0 <= finish)
+            .map(|p| p.0);
         let after = tempo_pairs.iter().find(|p| p.0 > finish).map(|p| p.0);
         assert!(
             before.is_some() && after.is_some(),
             "FINISH at {finish} not bracketed: before={before:?}, after={after:?}, pairs={tempo_pairs:?}"
+        );
+    }
+
+    #[test]
+    fn synthesize_events_with_mine_as_last_note_brackets_finish_correctly() {
+        // Learning 11 invariant applied to mines: a chart whose last
+        // note is a `NoteKind::Mine` (no trailing tap/hold) must
+        // still produce FINISH bracketed by two TIMING notes.
+        //
+        // Before Task 3 wired mines into the parser, `last_tick`'s
+        // filter clause only saw Tap/HoldHead/Shock. Now that mines
+        // participate in `Chart.notes`, the `_ => n.beat` fallthrough
+        // arm in `synthesize_events::last_tick` picks them up. This
+        // test locks that down.
+        use crate::model::{Bpm, TempoSegment};
+
+        // Build a Song where the chart's ONLY note is a mine at a
+        // late beat. No tap/hold at all.
+        let mine_tick = 10240i32; // beat 10
+        let mut song = song_with_last_note_at(i64::from(mine_tick));
+        song.charts[0].notes = vec![Note {
+            beat: Beat::from_measure_ticks(i64::from(mine_tick)).unwrap(),
+            kind: NoteKind::Mine,
+            panels: PanelSet::from_bits(Style::Single, 0x01),
+        }];
+        song.tempo_segments = vec![TempoSegment {
+            start_beat: Beat::zero(),
+            bpm: Bpm::from_rational(Rational::from_integer(120)),
+        }];
+
+        let initial_pairs = crate::ssq::writer::synthesize_tempo_entries(&song)
+            .expect("tempo synthesis should succeed");
+        // The writer's trailing entry should be at the mine's tick —
+        // same as any other last-note scenario.
+        assert_eq!(
+            initial_pairs.last().unwrap().0,
+            mine_tick,
+            "tempo synthesis must include the mine's beat as max_chart_beat"
+        );
+
+        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs);
+        let (finish, end) = finish_and_end_ticks(&events);
+
+        // last_measure = ((mine_tick + 4095) / 4096) * 4096
+        //              = ((10240 + 4095) / 4096) * 4096 = 3 * 4096 = 12288.
+        // desired_end = last_measure + 8192 = 20480. finish = end - 4096.
+        let last_measure = ((mine_tick + 4095) / 4096) * 4096;
+        let desired_end = last_measure + 8192;
+        assert_eq!(end, desired_end, "END at last_measure + 2 measures");
+        assert_eq!(finish, desired_end - 4096, "FINISH one measure before END");
+
+        // FINISH must be strictly bracketed by two tempo entries (Learning 11).
+        let before = tempo_pairs
+            .iter()
+            .rev()
+            .find(|p| p.0 <= finish)
+            .map(|p| p.0);
+        let after = tempo_pairs.iter().find(|p| p.0 > finish).map(|p| p.0);
+        assert!(
+            before.is_some(),
+            "FINISH at {finish}: no tempo pair at or before it. pairs={tempo_pairs:?}"
+        );
+        assert!(
+            after.is_some(),
+            "FINISH at {finish}: no tempo pair after it. pairs={tempo_pairs:?}"
+        );
+
+        // Final tempo pair should sit at END's tick.
+        assert_eq!(
+            tempo_pairs.last().unwrap().0,
+            end,
+            "last tempo pair must coincide with END"
         );
     }
 }

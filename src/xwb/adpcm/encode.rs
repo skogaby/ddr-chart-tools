@@ -24,8 +24,7 @@ const COEFFS: [(i32, i32); 7] = [
 
 /// Adaptation table indexed by unsigned nibble value (0..16).
 const ADAPT: [i32; 16] = [
-    230, 230, 230, 230, 307, 409, 512, 614,
-    768, 614, 512, 409, 307, 230, 230, 230,
+    230, 230, 230, 230, 307, 409, 512, 614, 768, 614, 512, 409, 307, 230, 230, 230,
 ];
 
 /// Encode interleaved i16 PCM into MS-ADPCM blocks.
@@ -238,7 +237,11 @@ fn simulate(samples: &[i16], c1: i32, c2: i32) -> (i64, i32) {
         let predicted = (prev1 * c1 + prev2 * c2) >> 8;
         let error = actual - predicted;
 
-        let nibble_signed = if delta == 0 { 0 } else { (error / delta).clamp(-8, 7) };
+        let nibble_signed = if delta == 0 {
+            0
+        } else {
+            (error / delta).clamp(-8, 7)
+        };
         let nibble = (nibble_signed & 0xF) as u8;
         let reconstructed = (predicted + nibble_signed * delta).clamp(-32768, 32767);
 

@@ -19,14 +19,10 @@ pub fn encode(audio: &AudioBuffer, out: &mut impl Write) -> Result<(), OggError>
     let sample_rate = NonZero::new(audio.sample_rate)
         .ok_or_else(|| OggError::Encode("sample rate must be non-zero".into()))?;
 
-    let mut encoder = VorbisEncoderBuilder::new(
-        sample_rate,
-        channels,
-        out,
-    )
-    .map_err(|e| OggError::Encode(e.to_string()))?
-    .build()
-    .map_err(|e| OggError::Encode(e.to_string()))?;
+    let mut encoder = VorbisEncoderBuilder::new(sample_rate, channels, out)
+        .map_err(|e| OggError::Encode(e.to_string()))?
+        .build()
+        .map_err(|e| OggError::Encode(e.to_string()))?;
 
     // Convert interleaved i16 to planar f32 in chunks.
     let ch = channels.get() as usize;

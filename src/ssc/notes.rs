@@ -142,12 +142,16 @@ fn decode_row(
     })?;
     let beat = Beat::from_rational(beat_rational);
 
-    // Shock detection: if any panel on this row is a mine, the WHOLE
-    // row must be a full-side or both-sides mine pattern. Partial
-    // mines would need a representation we don't have, so they're
-    // rejected rather than silently dropped.
-    let mine_bits = collect_mine_bits(row, style, measure_idx, row_idx)?;
-    if let Some(side) = mine_bits {
+    // Mine detection: classify the row per `classify_mine_row`.
+    // Full-row shock patterns (`MMMM` on Single, `MMMMMMMM` /
+    // `MMMM0000` / `0000MMMM` on Double) become a single `Shock`
+    // note — matches DDR's shock-arrow encoding. Partial mine
+    // patterns become a `Mine` note whose panels carry the mine
+    // bitmask; scanning of the row continues so that mixed
+    // `M`+`1`/`2`/`3`/`4` rows produce multiple notes at the same
+    // beat on different panels.
+    let mine_classification = classify_mine_row(row, style);
+    if let MineRowKind::FullRowShock(side) = mine_classification {
         notes.push(Note {
             beat,
             kind: NoteKind::Shock { side },
@@ -155,10 +159,23 @@ fn decode_row(
         });
         return Ok(());
     }
+    let mine_panel_mask = match mine_classification {
+        MineRowKind::PerPanelMines(mask) => mask,
+        _ => 0,
+    };
+    if mine_panel_mask != 0 {
+        notes.push(Note {
+            beat,
+            kind: NoteKind::Mine,
+            panels: PanelSet::from_bits(style, mine_panel_mask),
+        });
+    }
 
     // Collect all tap/hold-head panels on this row into a single Note
     // (matches SSQ's "one row hits multiple panels → one Note with a
     // multi-bit panel mask"). `3` tails and `F`/`L` don't emit notes.
+    // `M` characters are skipped — already consumed above into a Mine
+    // or Shock note.
     let mut tap_bits: u8 = 0;
     let mut hold_heads_this_row: Vec<usize> = Vec::new();
 
@@ -195,10 +212,8 @@ fn decode_row(
                 };
             }
             'M' => {
-                // Unreachable: collect_mine_bits already returned Some
-                // above when any `M` was present. Left as an assertion
-                // for defense in depth.
-                unreachable!("mine at panel {panel} should have been handled by collect_mine_bits");
+                // Already consumed into the Mine note (or a
+                // FullRowShock above). Nothing to do here.
             }
             'F' | 'L' => {
                 // Drop silently — not represented in our model.
@@ -228,51 +243,56 @@ fn decode_row(
     Ok(())
 }
 
-/// Scan `row` for mines and decide whether the pattern is a legal
-/// shock. Returns `Ok(None)` if no mines are present, `Ok(Some(side))`
-/// for an accepted shock pattern, or `Err(UnsupportedMine)` for any
-/// mine pattern outside the accepted set.
-fn collect_mine_bits(
-    row: &str,
-    style: Style,
-    measure_idx: usize,
-    row_idx: usize,
-) -> Result<Option<ShockSide>, SscError> {
+/// Classification of a single `#NOTES` row's `M` characters.
+///
+/// The three cases are mutually exclusive:
+/// - `FullRowShock(side)`: every panel on one side (or both sides) is
+///   a mine and no non-mine characters interfere. Rendered as a DDR
+///   shock arrow (step-chunk byte `0xFF` / `0x0F` / `0xF0`).
+/// - `PerPanelMines(mask)`: at least one `M` is present, but the
+///   pattern is not a full-row shock. The `mask` has one bit per
+///   panel set to 1 where the mine sits. The row may ALSO contain
+///   `1`/`2`/`3`/`4` characters on other panels — those produce
+///   their own notes at the same beat.
+/// - `NoMines`: no `M` characters in the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MineRowKind {
+    FullRowShock(ShockSide),
+    PerPanelMines(u8),
+    NoMines,
+}
+
+/// Scan `row` for mines and classify the pattern.
+///
+/// Full-row shock detection is preserved verbatim from the original
+/// `classify_mine_row(bits, style)` helper (Single mask `0x0F`, Double
+/// masks `0xFF` / `0x0F` / `0xF0`). Any other set of mine bits is
+/// classified as `PerPanelMines` — a per-panel ITG-style mine that
+/// maps to a `NoteKind::Mine` downstream (see
+/// `docs/ssq_mine_chunk_format.md`).
+///
+/// A row with no `M` characters returns `NoMines`; the caller then
+/// takes the existing tap/hold path.
+fn classify_mine_row(row: &str, style: Style) -> MineRowKind {
     let mut mine_bits: u8 = 0;
-    let mut non_mine_nonzero = false;
     for (panel, ch) in row.chars().enumerate() {
-        match ch {
-            'M' => mine_bits |= 1u8 << panel,
-            '0' | 'F' | 'L' => {}
-            _ => non_mine_nonzero = true,
+        if ch == 'M' {
+            mine_bits |= 1u8 << panel;
         }
     }
     if mine_bits == 0 {
-        return Ok(None);
+        return MineRowKind::NoMines;
     }
-    if non_mine_nonzero {
-        return Err(SscError::UnsupportedMine {
-            measure: measure_idx,
-            row: row_idx,
-            reason:
-                "row mixes mines with taps/holds; DDR shock arrows have no per-panel equivalent"
-                    .to_string(),
-        });
+    match full_row_shock_side(mine_bits, style) {
+        Some(side) => MineRowKind::FullRowShock(side),
+        None => MineRowKind::PerPanelMines(mine_bits),
     }
-    let side = classify_mine_row(mine_bits, style).ok_or_else(|| SscError::UnsupportedMine {
-        measure: measure_idx,
-        row: row_idx,
-        reason: format!(
-            "mine pattern 0x{mine_bits:02x} on {style:?} is not a full-row shock (expected all panels, or all-P1/all-P2 on Double)"
-        ),
-    })?;
-    Ok(Some(side))
 }
 
 /// Decide which `ShockSide` (if any) a mine bitmask represents under a
 /// given style. Returns `None` for patterns that don't form a legal
-/// shock.
-fn classify_mine_row(mine_bits: u8, style: Style) -> Option<ShockSide> {
+/// full-row shock — those are per-panel mines instead.
+fn full_row_shock_side(mine_bits: u8, style: Style) -> Option<ShockSide> {
     match style {
         Style::Single => {
             if mine_bits == 0x0F {
@@ -390,6 +410,19 @@ fn place_note_events(
                 if (mine_bits >> p) & 1 != 0 {
                     events.push((m, off, p, 'M'));
                 }
+            }
+        }
+        NoteKind::Mine => {
+            // Per-panel mine: emit 'M' for each active panel bit.
+            // Mirrors the `Tap` arm — mines are "instantaneous hit/miss
+            // on these panels at this beat" (see model's NoteKind
+            // doc). Coexists with Tap/HoldHead emission on the same
+            // row at different panels via the grid-assembly step in
+            // `write_notes_body`.
+            let (m, off) = split_beat_into_measure(beat)?;
+            *max_measure = (*max_measure).max(m);
+            for p in active_panels(note.panels, style) {
+                events.push((m, off, p, 'M'));
             }
         }
     }
@@ -591,10 +624,14 @@ mod tests {
     }
 
     #[test]
-    fn mine_is_rejected() {
+    fn single_mine_on_single_produces_mine_note() {
+        // `M000` on Single: a single mine on Left (bit 0).
+        // Was rejected pre-feature; now a valid `NoteKind::Mine`.
         let body = "M000\n0000\n0000\n0000\n";
-        let err = parse_notes_body(body, Style::Single).unwrap_err();
-        assert!(matches!(err, SscError::UnsupportedMine { .. }));
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x01);
     }
 
     #[test]
@@ -698,18 +735,75 @@ mod tests {
     }
 
     #[test]
-    fn mines_mixed_with_tap_is_rejected() {
+    fn mixed_mine_and_tap_produces_two_notes_at_same_beat() {
+        // `M100` on Single: mine on Left (bit 0), tap on Down (bit 1).
+        // Both notes at the same beat, different panels.
         let body = "M100\n0000\n0000\n0000\n";
-        let err = parse_notes_body(body, Style::Single).unwrap_err();
-        assert!(matches!(err, SscError::UnsupportedMine { .. }));
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 2);
+        // Parser emits the mine first, then the tap (decode_row order).
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x01);
+        assert_eq!(notes[1].kind, NoteKind::Tap);
+        assert_eq!(notes[1].panels.bits(), 0x02);
+        // Both at beat 0.
+        assert_eq!(notes[0].beat, notes[1].beat);
     }
 
     #[test]
-    fn partial_mines_on_double_are_rejected() {
-        // 3 mines on P1 isn't any recognized shock side.
+    fn partial_mines_on_double_produces_mine_note() {
+        // 3 mines on P1 isn't any recognized shock side; becomes a
+        // per-panel mine with mask 0x07.
         let body = "MMM00000\n00000000\n00000000\n00000000\n";
-        let err = parse_notes_body(body, Style::Double).unwrap_err();
-        assert!(matches!(err, SscError::UnsupportedMine { .. }));
+        let notes = parse_notes_body(body, Style::Double).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x07);
+    }
+
+    #[test]
+    fn single_down_mine_on_single_produces_0x02_mask() {
+        // `0M00` on Single: mine on Down (bit 1).
+        let body = "0M00\n0000\n0000\n0000\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x02);
+    }
+
+    #[test]
+    fn mine_mixed_with_taps_on_both_sides_produces_two_notes() {
+        // `M10M` on Single: Left mine (bit 0), Down tap (bit 1),
+        // Up stays 0, Right mine (bit 3).
+        // Expect: Mine with 0x09 (bits 0+3) + Tap with 0x02.
+        let body = "M10M\n0000\n0000\n0000\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x09);
+        assert_eq!(notes[1].kind, NoteKind::Tap);
+        assert_eq!(notes[1].panels.bits(), 0x02);
+    }
+
+    #[test]
+    fn partial_mines_on_single_below_full_row_produces_mine_note() {
+        // `MM00` on Single: two mines on Left + Down.
+        // Mask 0x03; not a full-row shock; becomes a Mine note.
+        let body = "MM00\n0000\n0000\n0000\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x03);
+    }
+
+    #[test]
+    fn single_p1_left_mine_on_double_produces_0x01_mask() {
+        // `M0000000` on Double: mine on P1 Left only.
+        let body = "M0000000\n00000000\n00000000\n00000000\n";
+        let notes = parse_notes_body(body, Style::Double).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Mine);
+        assert_eq!(notes[0].panels.bits(), 0x01);
     }
 
     // ---------- writer (write_notes_body / write_notedata) ----------
@@ -828,6 +922,112 @@ mod tests {
         };
         let body = write_body_string(&chart);
         assert_eq!(body, "MMMM0000\n00000000\n00000000\n00000000\n");
+    }
+
+    // ---------- Mine writing (Task 5) ----------
+
+    #[test]
+    fn writes_single_mine_at_beat_zero() {
+        let chart = crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_rational(Rational::zero()),
+                kind: NoteKind::Mine,
+                panels: PanelSet::from_bits(Style::Single, 0x01),
+            }],
+        };
+        let body = write_body_string(&chart);
+        assert_eq!(body, "M000\n0000\n0000\n0000\n");
+    }
+
+    #[test]
+    fn writes_multi_panel_mine_on_same_row() {
+        // A single Mine note with panels 0x0A (Down + Right) must
+        // produce `0M0M` — one 'M' per active panel bit.
+        let chart = crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_rational(Rational::zero()),
+                kind: NoteKind::Mine,
+                panels: PanelSet::from_bits(Style::Single, 0x0A),
+            }],
+        };
+        let body = write_body_string(&chart);
+        assert_eq!(body, "0M0M\n0000\n0000\n0000\n");
+    }
+
+    #[test]
+    fn writes_mine_and_tap_on_same_row_different_panels() {
+        // Mine on Left + Up (0x05) + Tap on Down + Right (0x0A),
+        // both at beat 0. Expect row `M1M1`.
+        let chart = crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![
+                Note {
+                    beat: Beat::from_rational(Rational::zero()),
+                    kind: NoteKind::Mine,
+                    panels: PanelSet::from_bits(Style::Single, 0x05),
+                },
+                Note {
+                    beat: Beat::from_rational(Rational::zero()),
+                    kind: NoteKind::Tap,
+                    panels: PanelSet::from_bits(Style::Single, 0x0A),
+                },
+            ],
+        };
+        let body = write_body_string(&chart);
+        assert_eq!(body, "M1M1\n0000\n0000\n0000\n");
+    }
+
+    #[test]
+    fn quantize_unchanged_by_mine_row() {
+        // Adding a Mine note to a row that already has a Tap must
+        // not change the picked quantize. Both charts have a note
+        // at beat 1.0 → expected quantize is 4 (rows=4 per measure).
+        let chart_tap_only = crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_rational(Rational::from_integer(1)),
+                kind: NoteKind::Tap,
+                panels: PanelSet::from_bits(Style::Single, 0x01),
+            }],
+        };
+        let chart_tap_and_mine = crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![
+                Note {
+                    beat: Beat::from_rational(Rational::from_integer(1)),
+                    kind: NoteKind::Tap,
+                    panels: PanelSet::from_bits(Style::Single, 0x01),
+                },
+                Note {
+                    beat: Beat::from_rational(Rational::from_integer(1)),
+                    kind: NoteKind::Mine,
+                    panels: PanelSet::from_bits(Style::Single, 0x02),
+                },
+            ],
+        };
+        let body_tap = write_body_string(&chart_tap_only);
+        let body_tap_mine = write_body_string(&chart_tap_and_mine);
+
+        // Row count must match — both produce a 4-row measure.
+        let rows_tap = body_tap.lines().count();
+        let rows_tap_mine = body_tap_mine.lines().count();
+        assert_eq!(
+            rows_tap, rows_tap_mine,
+            "mine note must not change the picked quantize"
+        );
+        assert_eq!(rows_tap, 4, "sanity: a beat-1.0 note fits a 4-row measure");
+        // The tap+mine body must have the mine on row 1 (beat 1.0)
+        // at panel 1 (Down) alongside the tap at panel 0 (Left):
+        // row = `1M00`.
+        let second_row = body_tap_mine.lines().nth(1).unwrap();
+        assert_eq!(second_row, "1M00");
     }
 
     #[test]

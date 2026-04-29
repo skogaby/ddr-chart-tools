@@ -22,24 +22,14 @@ pub const STEREO_BLOCK_SIZE: usize = 0x48;
 pub const SAMPLES_PER_BLOCK: usize = 64;
 
 static STEP_TABLE: [i16; 89] = [
-    7, 8, 9, 10, 11, 12, 13, 14,
-    16, 17, 19, 21, 23, 25, 28, 31,
-    34, 37, 41, 45, 50, 55, 60, 66,
-    73, 80, 88, 97, 107, 118, 130, 143,
-    157, 173, 190, 209, 230, 253, 279, 307,
-    337, 371, 408, 449, 494, 544, 598, 658,
-    724, 796, 876, 963, 1060, 1166, 1282, 1411,
-    1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024,
-    3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484,
-    7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
-    15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
-    32767,
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+    73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+    494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
+    2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+    10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
 ];
 
-static INDEX_TABLE: [i8; 16] = [
-    -1, -1, -1, -1, 2, 4, 6, 8,
-    -1, -1, -1, -1, 2, 4, 6, 8,
-];
+static INDEX_TABLE: [i8; 16] = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
 
 fn clamp16(v: i32) -> i16 {
     v.clamp(-32768, 32767) as i16
@@ -49,10 +39,18 @@ fn clamp16(v: i32) -> i16 {
 fn expand_nibble(nibble: u8, hist: &mut i32, step_index: &mut i32) -> i16 {
     let step = STEP_TABLE[*step_index as usize] as i32;
     let mut delta = step >> 3;
-    if nibble & 1 != 0 { delta += step >> 2; }
-    if nibble & 2 != 0 { delta += step >> 1; }
-    if nibble & 4 != 0 { delta += step; }
-    if nibble & 8 != 0 { delta = -delta; }
+    if nibble & 1 != 0 {
+        delta += step >> 2;
+    }
+    if nibble & 2 != 0 {
+        delta += step >> 1;
+    }
+    if nibble & 4 != 0 {
+        delta += step;
+    }
+    if nibble & 8 != 0 {
+        delta = -delta;
+    }
     *hist += delta;
     let sample = clamp16(*hist);
     *hist = sample as i32;
@@ -90,11 +88,13 @@ pub fn decode_stereo_block(block: &[u8], out: &mut Vec<i16>) {
                 let byte = block[chunk_off + byte_in_chunk];
                 // Low nibble first, then high nibble.
                 if sample_idx < SAMPLES_PER_BLOCK {
-                    ch_samples[ch][sample_idx] = expand_nibble(byte & 0x0F, &mut hist, &mut step_index);
+                    ch_samples[ch][sample_idx] =
+                        expand_nibble(byte & 0x0F, &mut hist, &mut step_index);
                     sample_idx += 1;
                 }
                 if sample_idx < SAMPLES_PER_BLOCK {
-                    ch_samples[ch][sample_idx] = expand_nibble(byte >> 4, &mut hist, &mut step_index);
+                    ch_samples[ch][sample_idx] =
+                        expand_nibble(byte >> 4, &mut hist, &mut step_index);
                     sample_idx += 1;
                 }
             }
@@ -126,8 +126,12 @@ mod tests {
         let mut block = [0u8; STEREO_BLOCK_SIZE];
         let l = hist_l.to_le_bytes();
         let r = hist_r.to_le_bytes();
-        block[0] = l[0]; block[1] = l[1]; block[2] = 0; // step_index=0
-        block[4] = r[0]; block[5] = r[1]; block[6] = 0;
+        block[0] = l[0];
+        block[1] = l[1];
+        block[2] = 0; // step_index=0
+        block[4] = r[0];
+        block[5] = r[1];
+        block[6] = 0;
         block
     }
 
@@ -145,14 +149,17 @@ mod tests {
         let block = make_silent_block(1000, -500);
         let mut out = Vec::new();
         decode_stereo_block(&block, &mut out);
-        assert_eq!(out[0], 1000);  // L channel first sample
-        assert_eq!(out[1], -500);  // R channel first sample
+        assert_eq!(out[0], 1000); // L channel first sample
+        assert_eq!(out[1], -500); // R channel first sample
     }
 
     #[test]
     fn bytes_to_samples_full_blocks() {
         // 2 full stereo blocks
-        assert_eq!(bytes_to_samples(STEREO_BLOCK_SIZE * 2), SAMPLES_PER_BLOCK * 2);
+        assert_eq!(
+            bytes_to_samples(STEREO_BLOCK_SIZE * 2),
+            SAMPLES_PER_BLOCK * 2
+        );
     }
 
     #[test]

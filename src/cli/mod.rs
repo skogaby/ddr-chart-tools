@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use clap::Parser;
 use thiserror::Error;
 
-use job::{Format, Job};
 use crate::util::pair;
+use job::{Format, Job};
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -181,10 +181,14 @@ mod tests {
     #[test]
     fn single_file_mode_parses() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-            "--chartfile", "song.ssq",
-            "--audiofile", "song.xwb",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--chartfile",
+            "song.ssq",
+            "--audiofile",
+            "song.xwb",
         ])
         .unwrap();
         assert_eq!(c.from_format, Format::Ddr);
@@ -195,9 +199,12 @@ mod tests {
     #[test]
     fn batch_mode_parses() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-            "--input-folder", "/tmp/songs",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--input-folder",
+            "/tmp/songs",
         ])
         .unwrap();
         assert!(c.chartfile.is_none());
@@ -208,10 +215,14 @@ mod tests {
     #[test]
     fn rejects_legacy_output() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "DDR_LEGACY",
-            "--chartfile", "x.ssq",
-            "--audiofile", "x.xwb",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "DDR_LEGACY",
+            "--chartfile",
+            "x.ssq",
+            "--audiofile",
+            "x.xwb",
         ])
         .unwrap();
         assert!(matches!(c.validate(), Err(CliError::LegacyOutputForbidden)));
@@ -220,10 +231,14 @@ mod tests {
     #[test]
     fn rejects_same_format() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "DDR",
-            "--chartfile", "x.ssq",
-            "--audiofile", "x.xwb",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "x.ssq",
+            "--audiofile",
+            "x.xwb",
         ])
         .unwrap();
         assert!(matches!(
@@ -235,9 +250,12 @@ mod tests {
     #[test]
     fn rejects_chartfile_without_audiofile() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-            "--chartfile", "x.ssq",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--chartfile",
+            "x.ssq",
         ])
         .unwrap();
         assert!(matches!(c.validate(), Err(CliError::MissingFilePair)));
@@ -245,21 +263,21 @@ mod tests {
 
     #[test]
     fn rejects_no_input_mode() {
-        let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-        ])
-        .unwrap();
+        let c = cli(&["--from-format", "DDR", "--to-format", "SM5"]).unwrap();
         assert!(matches!(c.validate(), Err(CliError::MissingFilePair)));
     }
 
     #[test]
     fn single_file_into_jobs() {
         let c = cli(&[
-            "--from-format", "SM5",
-            "--to-format", "DDR",
-            "--chartfile", "song.ssc",
-            "--audiofile", "song.ogg",
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "song.ssc",
+            "--audiofile",
+            "song.ogg",
         ])
         .unwrap();
         c.validate().unwrap();
@@ -272,10 +290,14 @@ mod tests {
     #[test]
     fn verbose_flag_counts() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-            "--chartfile", "x.ssq",
-            "--audiofile", "x.xwb",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--chartfile",
+            "x.ssq",
+            "--audiofile",
+            "x.xwb",
             "-vv",
         ])
         .unwrap();
@@ -285,10 +307,14 @@ mod tests {
     #[test]
     fn overwrite_flag() {
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
-            "--chartfile", "x.ssq",
-            "--audiofile", "x.xwb",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--chartfile",
+            "x.ssq",
+            "--audiofile",
+            "x.xwb",
             "--overwrite",
         ])
         .unwrap();
@@ -304,8 +330,10 @@ mod tests {
         std::fs::write(dir.path().join("b.xwb"), b"").unwrap();
 
         let c = cli(&[
-            "--from-format", "DDR",
-            "--to-format", "SM5",
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
             "--input-folder",
             dir.path().to_str().unwrap(),
         ])

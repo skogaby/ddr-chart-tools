@@ -36,6 +36,14 @@ pub fn write(
     for chart in &song.charts {
         write_steps_chunk(chart, out)?;
     }
+    // MINE_DATA chunks are per-difficulty (spec §2.1) and live
+    // between the last step chunk and the file terminator.
+    // `mines::write_chunk` emits nothing for charts with no
+    // `NoteKind::Mine` notes, so mine-free songs produce
+    // byte-identical output to the pre-mines-feature writer.
+    for chart in &song.charts {
+        super::mines::write_chunk(chart, out)?;
+    }
     // File terminator — a chunk length of 0.
     out.write_all(&0u32.to_le_bytes()).map_err(io_err)?;
     Ok(())
@@ -73,8 +81,7 @@ fn beat_to_measure_ticks(beat: Beat) -> Result<i32, SsqError> {
     let den = r.den() as i128;
     let half = if num >= 0 { den / 2 } else { -(den / 2) };
     let rounded = (num + half) / den;
-    i32::try_from(rounded)
-        .map_err(|_| SsqError::Write("measure-tick out of i32 range".to_string()))
+    i32::try_from(rounded).map_err(|_| SsqError::Write("measure-tick out of i32 range".to_string()))
 }
 
 fn write_tempo_chunk(
@@ -353,6 +360,11 @@ fn emit_steps_and_freezes(chart: &Chart) -> Result<StepsBody, SsqError> {
                 let end_tick = beat_to_measure_ticks(end_beat)?;
                 freezes.push((end_tick, note.panels.bits()));
             }
+            NoteKind::Mine => {
+                // Mines travel in a dedicated MINE_DATA chunk, not in the step chunk.
+                // Emitting them into `rows` here would misclassify them as taps
+                // at load time. A separate writer pass handles the mine chunk.
+            }
         }
     }
 
@@ -391,7 +403,10 @@ fn emit_steps_and_freezes(chart: &Chart) -> Result<StepsBody, SsqError> {
     Ok((time_offsets, step_bytes, freeze_entries))
 }
 
-fn difficulty_code(style: crate::model::Style, difficulty: crate::model::Difficulty) -> u16 {
+pub(super) fn difficulty_code(
+    style: crate::model::Style,
+    difficulty: crate::model::Difficulty,
+) -> u16 {
     use crate::model::{Difficulty, Style};
     let style_byte: u16 = match style {
         Style::Single => 0x14,

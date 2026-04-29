@@ -152,7 +152,7 @@ pub enum ShockSide {
     P2Only,
 }
 
-/// One note (or sustain start, or shock) at a specific beat.
+/// One note (or sustain start, shock, or mine) at a specific beat.
 #[derive(Debug, Clone)]
 pub struct Note {
     pub beat: Beat,
@@ -170,6 +170,10 @@ pub enum NoteKind {
     Shock {
         side: ShockSide,
     },
+    /// Per-panel hazard note (ITG-style mine). Panel info rides on
+    /// `Note.panels`, matching `Tap`. Unlike `Shock`, a mine affects
+    /// only the panels it sits on.
+    Mine,
 }
 
 /// One difficulty of one song.
@@ -279,5 +283,56 @@ mod tests {
         let slow = Bpm::from_rational(Rational::from_integer(120));
         let fast = Bpm::from_rational(Rational::from_integer(240));
         assert!(slow < fast);
+    }
+
+    #[test]
+    fn mine_variant_equals_itself_and_differs_from_tap() {
+        assert_eq!(NoteKind::Mine, NoteKind::Mine);
+        assert_ne!(NoteKind::Mine, NoteKind::Tap);
+    }
+
+    #[test]
+    fn mine_variant_differs_from_shock() {
+        assert_ne!(
+            NoteKind::Mine,
+            NoteKind::Shock {
+                side: ShockSide::BothSides
+            }
+        );
+    }
+
+    #[test]
+    fn mine_variant_differs_from_holdhead() {
+        assert_ne!(
+            NoteKind::Mine,
+            NoteKind::HoldHead {
+                length: Beat::from_measure_ticks(1024).unwrap()
+            }
+        );
+    }
+
+    #[test]
+    fn mine_variant_hashes_consistently() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        NoteKind::Mine.hash(&mut h1);
+        NoteKind::Mine.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn mine_note_clones_preserve_panels_and_beat() {
+        let note = Note {
+            beat: Beat::from_measure_ticks(2048).unwrap(),
+            kind: NoteKind::Mine,
+            panels: PanelSet::from_bits(Style::Single, 0x05),
+        };
+        let cloned = note.clone();
+        assert_eq!(cloned.kind, NoteKind::Mine);
+        assert_eq!(cloned.panels.bits(), 0x05);
+        assert_eq!(cloned.beat, note.beat);
     }
 }

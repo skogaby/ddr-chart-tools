@@ -82,6 +82,17 @@
       "childSimIds": {},
       "pointsSpent": {},
       "crUrl": null
+    },
+    "20260429-ddr-mines-support": {
+      "primaryPackage": "ddr-chart-tools",
+      "workflowPath": ".spec/workflow/20260429-ddr-mines-support",
+      "status": "completed",
+      "stage": "done",
+      "createdDate": "2026-04-29T01:07:02-05:00",
+      "parentSimId": null,
+      "childSimIds": {},
+      "pointsSpent": {},
+      "crUrl": null
     }
   }
 }

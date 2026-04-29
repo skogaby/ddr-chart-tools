@@ -15,6 +15,7 @@
 pub mod auxiliary;
 pub mod chunk;
 pub mod events;
+pub mod mines;
 pub mod steps;
 pub mod tempo;
 pub mod writer;
@@ -72,6 +73,17 @@ pub enum SsqError {
 
     #[error("cannot serialize beat {beat}/{beat_den} — not an integer measure-tick at TPS=1000")]
     NonIntegerBeat { beat: i64, beat_den: u64 },
+
+    #[error("mine chunk at byte {offset}: declared length {declared} does not match entry count {param3} (expected {expected})")]
+    MineChunkLengthMismatch {
+        offset: usize,
+        declared: u32,
+        param3: u16,
+        expected: u32,
+    },
+
+    #[error("mines::write_chunk refuses to emit shock-mask panels 0x{panels:02X} (reserved for step-chunk shocks per spec §3.2)")]
+    InvalidMinePanels { panels: u8 },
 }
 
 /// Output of parsing an SSQ file: the format-independent `Song` plus
@@ -150,6 +162,21 @@ fn dispatch_chunk(
             partial.charts.push(chart);
             Ok(())
         }
+        20 => {
+            // MINE_DATA chunk (`docs/ssq_mine_chunk_format.md`).
+            // `parse_chunk` returns `None` on header-level failures
+            // (length mismatch, param2 invalid) after logging a
+            // `warn!`; in that case we skip this chunk and continue
+            // parsing the rest of the file. On success, collect the
+            // chunk into `pending_mine_chunks` — final attachment to
+            // charts happens at `finalize` time so that charts with
+            // higher byte offsets than their paired MINE_DATA chunk
+            // still get their mines attached correctly.
+            if let Some((param2, notes)) = mines::parse_chunk(header, body, offset) {
+                partial.pending_mine_chunks.push((param2, notes));
+            }
+            Ok(())
+        }
         other => Err(SsqError::UnexpectedChunkType { ty: other, offset }),
     }
 }
@@ -169,6 +196,12 @@ pub(crate) struct PartialSong {
     pub events: Vec<SsqEvent>,
     pub aux_chunks_dropped: Vec<AuxMeta>,
     pub charts: Vec<crate::model::Chart>,
+    /// Parsed kind-20 mine chunks in insertion order, keyed by their
+    /// `param2` difficulty code (see `docs/ssq_mine_chunk_format.md`
+    /// §2.1). Drained by `finalize` into the matching chart's
+    /// `notes` list, with duplicate `(type=20, param2=X)` chunks
+    /// warned-and-dropped per spec §2.2.
+    pub pending_mine_chunks: Vec<(u16, Vec<crate::model::Note>)>,
 }
 
 impl PartialSong {
@@ -184,6 +217,7 @@ impl PartialSong {
             events: Vec::new(),
             aux_chunks_dropped: Vec::new(),
             charts: Vec::new(),
+            pending_mine_chunks: Vec::new(),
         }
     }
 
@@ -196,13 +230,22 @@ impl PartialSong {
         self.raw_tempo_pairs = result.raw_pairs;
     }
 
-    fn finalize(self) -> Result<SsqParseResult, SsqError> {
+    fn finalize(mut self) -> Result<SsqParseResult, SsqError> {
         if !self.tempo_seen {
             return Err(SsqError::MissingTempoChunk);
         }
         if !self.events_seen {
             return Err(SsqError::MissingEventsChunk);
         }
+
+        // Attach parsed MINE_DATA chunks to their matching charts by
+        // difficulty code (`docs/ssq_mine_chunk_format.md §2.1`).
+        // Walk in insertion order so duplicate-detection is
+        // deterministic (first chunk wins, subsequent duplicates
+        // warn+drop). A chunk whose `param2` matches no chart is an
+        // orphan: warn+drop per spec §2.2.
+        attach_mine_chunks(&mut self.charts, &self.pending_mine_chunks);
+
         let song = Song {
             title: None,
             artist: None,
@@ -224,6 +267,59 @@ impl PartialSong {
             raw_tempo_pairs: self.raw_tempo_pairs,
             aux_chunks_dropped: self.aux_chunks_dropped,
         })
+    }
+}
+
+/// Attach parsed MINE_DATA chunks to their matching charts by
+/// difficulty code, following the rules in
+/// `docs/ssq_mine_chunk_format.md §2`:
+///
+/// - Walks `pending` in insertion order.
+/// - **Match found, first chunk for this chart** → clone each note
+///   into the chart's `notes` list, re-mask `panels` via
+///   [`PanelSet::from_bits`] (idempotent on valid inputs — defensive
+///   against hand-built `Note`s that bypass [`mines::parse_chunk`]'s
+///   validation), then stable-sort the chart's notes by `beat`.
+/// - **Match found, subsequent chunk for same chart** → duplicate
+///   `(type=20, param2=X)` pair; spec §2.2 says the DLL stops at
+///   the first match, so the tool mirrors that: warn and discard.
+/// - **No matching chart** → orphan chunk; warn and discard.
+///
+/// This function only emits `warn!` on the discard paths; successful
+/// attachments are silent because the chart's note count is already
+/// visible at `debug!` level elsewhere in the pipeline.
+fn attach_mine_chunks(
+    charts: &mut [crate::model::Chart],
+    pending: &[(u16, Vec<crate::model::Note>)],
+) {
+    use std::collections::HashSet;
+
+    let mut charts_with_mines: HashSet<usize> = HashSet::new();
+
+    for (param2, notes) in pending {
+        let match_idx = charts
+            .iter()
+            .position(|c| writer::difficulty_code(c.style, c.difficulty) == *param2);
+        match match_idx {
+            None => log::warn!(
+                "orphan mine chunk param2=0x{param2:04X}: no step chunk with this difficulty code; discarding {} entries",
+                notes.len()
+            ),
+            Some(idx) if charts_with_mines.contains(&idx) => log::warn!(
+                "duplicate mine chunk param2=0x{param2:04X}: already attached a chunk to this chart; discarding {} entries from the subsequent chunk (spec §2.2)",
+                notes.len()
+            ),
+            Some(idx) => {
+                let chart = &mut charts[idx];
+                for note in notes {
+                    let mut cloned = note.clone();
+                    cloned.panels = crate::model::PanelSet::from_bits(chart.style, note.panels.bits());
+                    chart.notes.push(cloned);
+                }
+                chart.notes.sort_by_key(|n| n.beat);
+                charts_with_mines.insert(idx);
+            }
+        }
     }
 }
 
@@ -378,5 +474,259 @@ mod tests {
         bytes.extend_from_slice(&bad_chunk);
         bytes.extend_from_slice(&0u32.to_le_bytes()); // terminator
         assert!(parse(&bytes).is_err());
+    }
+
+    // ---------- Mine wiring tests (Task 3) ----------
+    // These cover US-6 (no-mine baseline preserved) and the parser's
+    // orphan/duplicate-detection paths in `attach_mine_chunks`.
+
+    /// Build a complete minimal Song with the given charts, ready to
+    /// be fed to `writer::write`. One tempo segment at 120 BPM,
+    /// TPS=1000, no stops, empty audio.
+    fn song_with_charts(charts: Vec<crate::model::Chart>) -> crate::model::Song {
+        use crate::model::{AudioBuffer, Bpm, PreviewSlice, Song, TempoSegment};
+        Song {
+            title: None,
+            artist: None,
+            tps: 1000,
+            tempo_segments: vec![TempoSegment {
+                start_beat: crate::model::Beat::zero(),
+                bpm: Bpm::from_rational(Rational::from_integer(120)),
+            }],
+            stops: Vec::new(),
+            charts,
+            audio: AudioBuffer {
+                samples: Vec::new(),
+                sample_rate: 0,
+                channels: 0,
+            },
+            audio_sync_offset_seconds: Rational::zero(),
+            preview: PreviewSlice::default_window(),
+        }
+    }
+
+    /// Build an 8-byte mine entry (for synthetic orphan/duplicate bodies).
+    fn mine_entry_bytes(beat_count: i32, panels: u8) -> Vec<u8> {
+        let mut v = Vec::with_capacity(8);
+        v.extend_from_slice(&(beat_count as u32).to_le_bytes());
+        v.push(panels);
+        v.push(0); // flags
+        v.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        v
+    }
+
+    /// Build a MINE_DATA chunk body from `(beat_count, panels)` tuples.
+    fn mine_body(entries: &[(i32, u8)]) -> Vec<u8> {
+        let mut body = Vec::with_capacity(entries.len() * 8);
+        for (beat, panels) in entries {
+            body.extend_from_slice(&mine_entry_bytes(*beat, *panels));
+        }
+        body
+    }
+
+    /// Construct a chart with just `NoteKind::Mine` notes at the
+    /// given `(beat_tick, panels)` positions.
+    fn mine_only_chart(
+        style: crate::model::Style,
+        difficulty: crate::model::Difficulty,
+        mines: &[(i32, u8)],
+    ) -> crate::model::Chart {
+        use crate::model::{Beat, Chart, Note, NoteKind, PanelSet};
+        let notes = mines
+            .iter()
+            .map(|(tick, panels)| Note {
+                beat: Beat::from_measure_ticks(i64::from(*tick)).unwrap(),
+                kind: NoteKind::Mine,
+                panels: PanelSet::from_bits(style, *panels),
+            })
+            .collect();
+        Chart {
+            style,
+            difficulty,
+            notes,
+        }
+    }
+
+    #[test]
+    fn ddr_to_ddr_no_mine_baseline_is_byte_identical() {
+        // A chart with one Tap and zero mines must produce
+        // byte-identical output under write → parse → write.
+        // Guards US-6: the writer's new per-chart mines loop
+        // emits nothing for mine-free charts, so the output
+        // byte sequence is unchanged from pre-feature behavior.
+        use crate::model::{Beat, Chart, Difficulty, Note, NoteKind, PanelSet, Style};
+
+        let chart = Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_measure_ticks(1024).unwrap(),
+                kind: NoteKind::Tap,
+                panels: PanelSet::from_bits(Style::Single, 0x01),
+            }],
+        };
+        let song = song_with_charts(vec![chart]);
+        let events = vec![events::SsqEvent {
+            tick: 0,
+            code: 1,
+            arg: 4,
+        }];
+        let raw_pairs = vec![(0, 0), (4096, 2000)];
+
+        let mut bytes1 = Vec::new();
+        writer::write(&song, &events, &raw_pairs, &mut bytes1).unwrap();
+
+        let parsed = parse(&bytes1).unwrap();
+
+        let mut bytes2 = Vec::new();
+        writer::write(
+            &parsed.song,
+            &parsed.events,
+            &parsed.raw_tempo_pairs,
+            &mut bytes2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            bytes1, bytes2,
+            "no-mine round-trip must produce byte-identical output"
+        );
+    }
+
+    #[test]
+    fn ddr_to_ddr_per_difficulty_mines_round_trip() {
+        // Two charts with distinct mine patterns at different
+        // difficulties. Write → parse → assert mines attach to
+        // the correct chart by `param2`, then write again and
+        // confirm byte-equality.
+        use crate::model::{Difficulty, NoteKind, Style};
+
+        let basic = mine_only_chart(
+            Style::Single,
+            Difficulty::Basic,
+            &[(1024, 0x01), (2048, 0x04)],
+        );
+        let expert = mine_only_chart(
+            Style::Double,
+            Difficulty::Expert,
+            &[(0, 0x11), (3072, 0x88)],
+        );
+        let song = song_with_charts(vec![basic, expert]);
+        let events = vec![events::SsqEvent {
+            tick: 0,
+            code: 1,
+            arg: 4,
+        }];
+        let raw_pairs = vec![(0, 0), (4096, 2000)];
+
+        let mut bytes1 = Vec::new();
+        writer::write(&song, &events, &raw_pairs, &mut bytes1).unwrap();
+
+        let parsed = parse(&bytes1).unwrap();
+        assert_eq!(parsed.song.charts.len(), 2);
+
+        // First chart (Single Basic) received its 2 mines.
+        let basic_parsed = &parsed.song.charts[0];
+        assert_eq!(basic_parsed.style, Style::Single);
+        assert_eq!(basic_parsed.difficulty, Difficulty::Basic);
+        assert_eq!(basic_parsed.notes.len(), 2);
+        for n in &basic_parsed.notes {
+            assert_eq!(n.kind, NoteKind::Mine);
+        }
+
+        // Second chart (Double Expert) received its 2 mines.
+        let expert_parsed = &parsed.song.charts[1];
+        assert_eq!(expert_parsed.style, Style::Double);
+        assert_eq!(expert_parsed.difficulty, Difficulty::Expert);
+        assert_eq!(expert_parsed.notes.len(), 2);
+        for n in &expert_parsed.notes {
+            assert_eq!(n.kind, NoteKind::Mine);
+        }
+
+        // Write again — bytes must match the first write.
+        let mut bytes2 = Vec::new();
+        writer::write(
+            &parsed.song,
+            &parsed.events,
+            &parsed.raw_tempo_pairs,
+            &mut bytes2,
+        )
+        .unwrap();
+        assert_eq!(bytes1, bytes2, "per-difficulty mine round-trip byte-equal");
+    }
+
+    #[test]
+    fn ddr_orphan_mine_chunk_is_warned_and_dropped() {
+        // A MINE_DATA chunk whose `param2` is `0x0318` (Double
+        // Expert) but the file has only a Single Basic step chunk.
+        // The parser must succeed, the Single Basic chart must have
+        // no mine notes, and a warn is logged (not asserted here —
+        // formal warn coverage is Task 5).
+        use crate::model::NoteKind;
+
+        let mine_chunk = (20, 0x0318, 1, mine_body(&[(1024, 0x04)]));
+        let bytes = build_ssq(&[
+            minimal_tempo_chunk(),
+            minimal_events_chunk(),
+            (3, 0x0114, 0, vec![]), // Single Basic, empty
+            mine_chunk,
+        ]);
+
+        let result = parse(&bytes).unwrap();
+        assert_eq!(result.song.charts.len(), 1);
+        assert_eq!(
+            result.song.charts[0].notes.len(),
+            0,
+            "orphan mine chunk must not attach to the unrelated chart"
+        );
+        // Sanity: no note of any kind sneaked through.
+        for n in &result.song.charts[0].notes {
+            assert_ne!(n.kind, NoteKind::Mine);
+        }
+    }
+
+    #[test]
+    fn ddr_duplicate_mine_chunk_keeps_first_drops_second() {
+        // Two MINE_DATA chunks with the same `param2` (0x0114 =
+        // Single Basic). The parser keeps the first chunk's mines
+        // and drops the second with a warn (spec §2.2: DLL stops
+        // at first match).
+        use crate::model::NoteKind;
+
+        // First chunk: one mine at beat 1024, panel 0x01.
+        let chunk_first = (20, 0x0114, 1, mine_body(&[(1024, 0x01)]));
+        // Second chunk: a different mine at beat 2048, panel 0x04.
+        // If the second chunk were attached, the chart would have
+        // two mines; we assert it has only the first chunk's one.
+        let chunk_second = (20, 0x0114, 1, mine_body(&[(2048, 0x04)]));
+        let bytes = build_ssq(&[
+            minimal_tempo_chunk(),
+            minimal_events_chunk(),
+            (3, 0x0114, 0, vec![]), // Single Basic, empty
+            chunk_first,
+            chunk_second,
+        ]);
+
+        let result = parse(&bytes).unwrap();
+        assert_eq!(result.song.charts.len(), 1);
+        let chart = &result.song.charts[0];
+        // Only the first chunk's mine should be attached.
+        let mine_count = chart
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .count();
+        assert_eq!(mine_count, 1, "duplicate chunk must be dropped");
+        // And it should be the first chunk's mine: tick 1024 panel 0x01.
+        let first_mine = chart
+            .notes
+            .iter()
+            .find(|n| matches!(n.kind, NoteKind::Mine))
+            .unwrap();
+        assert_eq!(first_mine.panels.bits(), 0x01);
+        assert_eq!(
+            first_mine.beat,
+            crate::model::Beat::from_measure_ticks(1024).unwrap()
+        );
     }
 }

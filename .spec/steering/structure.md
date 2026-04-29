@@ -77,7 +77,7 @@ ddr-chart-tools/
 | `cli/` | arg parsing, validation, translating CLI intent into a list of conversion jobs | file I/O, format parsing |
 | `job/` | per-job orchestration (dispatch, output paths, overwrite check, Ultramix `.sif` ingestion, sync-offset bias), batch runner with per-file error recovery | CLI concerns, binary-level format details |
 | `model/` | format-independent types and rules about valid combinations | any I/O, any format-specific encoding |
-| `ssq/` | modern SSQ parse + write, chunk types 1/2/3 only | SSC writing, audio |
+| `ssq/` | modern SSQ parse + write, chunk types 1/2/3 and 20 (mines); see `docs/ssq_format.md` and `docs/ssq_mine_chunk_format.md` | SSC writing, audio |
 | `ssq_legacy/` | legacy SSQ modernization (origin-shift normalization, TPS rescale, aux-chunk drop) | writing SSQs (defers to `ssq/`) |
 | `ssc/` | SSC text parse + write | SM parsing (separate module), audio |
 | `sm/` | SM text parse only | any writing |

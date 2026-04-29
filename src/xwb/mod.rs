@@ -34,8 +34,7 @@ pub fn parse_audio(bytes: &[u8]) -> Result<AudioBuffer, XwbError> {
         .iter()
         .max_by_key(|e| e.data.len())
         .ok_or(XwbError::NoEntries)?;
-    let samples =
-        adpcm::decode::decode(&entry.data, &entry.format).map_err(XwbError::Adpcm)?;
+    let samples = adpcm::decode::decode(&entry.data, &entry.format).map_err(XwbError::Adpcm)?;
     Ok(AudioBuffer {
         samples,
         sample_rate: entry.format.sample_rate(),

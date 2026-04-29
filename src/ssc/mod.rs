@@ -41,13 +41,6 @@ pub enum SscError {
         panel: u8,
     },
 
-    #[error("unsupported mine pattern at measure {measure}, row {row}: {reason}. Only DDR-shock-equivalent full-row mine patterns (all panels, or all-P1 / all-P2 on Double) are accepted.")]
-    UnsupportedMine {
-        measure: usize,
-        row: usize,
-        reason: String,
-    },
-
     #[error("invalid value for tag {tag}: {reason}")]
     InvalidValue { tag: String, reason: String },
 
@@ -251,7 +244,11 @@ pub(crate) fn empty_song() -> Song {
     }
 }
 
-pub(crate) fn apply_song_tag(song: &mut Song, tag: &str, value: &msd::MsdValue) -> Result<(), SscError> {
+pub(crate) fn apply_song_tag(
+    song: &mut Song,
+    tag: &str,
+    value: &msd::MsdValue,
+) -> Result<(), SscError> {
     let v = value.param(1).trim();
     match tag {
         "TITLE" => {
@@ -795,6 +792,456 @@ MMMM
             NoteKind::Shock {
                 side: crate::model::ShockSide::BothSides
             }
+        );
+    }
+
+    // ---------- SM5 → DDR integration (Task 4) ----------
+
+    /// Parse an SSC string, then re-serialize as SSQ and re-parse.
+    /// Models the full SM5 → DDR pipeline for these tests.
+    fn ssc_to_ssq_to_ssq_parse(ssc_text: &str) -> crate::ssq::SsqParseResult {
+        let song = parse(ssc_text).unwrap();
+        // Empty events list + empty raw pairs → SSQ writer synthesizes
+        // its own tempo entries from the semantic view. That's the
+        // same path the real SM5 → DDR job layer takes for a
+        // synthetic song with no pre-parsed SSQ sidecar data.
+        let events: Vec<crate::ssq::events::SsqEvent> = Vec::new();
+        let raw_pairs: Vec<(i32, i32)> = Vec::new();
+        let mut ssq_bytes = Vec::new();
+        crate::ssq::writer::write(&song, &events, &raw_pairs, &mut ssq_bytes).unwrap();
+        crate::ssq::parse(&ssq_bytes).unwrap()
+    }
+
+    #[test]
+    fn sm5_to_ddr_per_difficulty_mines_produces_two_mine_chunks() {
+        // Two charts with different per-panel mines. After SM5 → DDR
+        // both should have their mines preserved, each in a distinct
+        // MINE_DATA chunk keyed by the chart's difficulty code.
+        // Single Basic gets a mine at beat 0 on Left, beat 1 on
+        // Down + Right (multi-bit 0x0A). Double Expert gets a mine
+        // at beat 2 on P1 Left + P2 Right (multi-bit 0x81).
+        use crate::model::{NoteKind, Style};
+
+        let text = "\
+#TITLE:MinesTwoDifficulties;
+#BPMS:0.000=120.000;
+#STOPS:;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#NOTES:
+M000
+0M0M
+0000
+0000
+;
+#NOTEDATA:;
+#STEPSTYPE:dance-double;
+#DIFFICULTY:Hard;
+#NOTES:
+00000000
+00000000
+M000000M
+00000000
+;
+";
+        let re_parsed = ssc_to_ssq_to_ssq_parse(text);
+
+        assert_eq!(re_parsed.song.charts.len(), 2);
+
+        // Chart 0: Single Basic.
+        let basic = &re_parsed.song.charts[0];
+        assert_eq!(basic.style, Style::Single);
+        assert_eq!(basic.difficulty, Difficulty::Basic);
+        let basic_mines: Vec<&crate::model::Note> = basic
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .collect();
+        assert_eq!(
+            basic_mines.len(),
+            2,
+            "Single Basic should have 2 mine entries (one per unique beat)"
+        );
+        // Beats: 0 (row 0) and 1 (row 1 in a 4-row measure = beat 4*1/4 = 1).
+        // Beat 0 → panels 0x01 (Left only).
+        // Beat 1 → panels 0x0A (Down + Right).
+        assert_eq!(basic_mines[0].panels.bits(), 0x01);
+        assert_eq!(basic_mines[1].panels.bits(), 0x0A);
+
+        // Chart 1: Double Expert.
+        let expert = &re_parsed.song.charts[1];
+        assert_eq!(expert.style, Style::Double);
+        assert_eq!(expert.difficulty, Difficulty::Expert);
+        let expert_mines: Vec<&crate::model::Note> = expert
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .collect();
+        assert_eq!(
+            expert_mines.len(),
+            1,
+            "Double Expert should have 1 mine entry"
+        );
+        // Beat 2 (row 2 in a 4-row measure = beat 2), panels 0x81.
+        assert_eq!(expert_mines[0].panels.bits(), 0x81);
+    }
+
+    #[test]
+    fn ddr_to_sm5_to_ddr_shock_round_trip_preserves_step_byte_shock() {
+        // Build a Song with a Shock note (as if parsed from a step
+        // chunk with byte 0xFF). Write → parse as DDR → SSC, parse
+        // SSC → parse back as DDR. After the full round-trip the
+        // chart must still have the Shock note (not a Mine note),
+        // and the final SSQ bytes must contain NO type-20 chunk.
+        use crate::model::{Beat, Chart, Note, NoteKind, Rational, ShockSide, Song, Style};
+
+        let chart = Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_measure_ticks(1024).unwrap(),
+                kind: NoteKind::Shock {
+                    side: ShockSide::BothSides,
+                },
+                panels: crate::model::PanelSet::empty(),
+            }],
+        };
+        let song_in = Song {
+            title: None,
+            artist: None,
+            tps: 1000,
+            tempo_segments: vec![crate::model::TempoSegment {
+                start_beat: Beat::zero(),
+                bpm: crate::model::Bpm::from_rational(Rational::from_integer(120)),
+            }],
+            stops: Vec::new(),
+            charts: vec![chart],
+            audio: crate::model::AudioBuffer {
+                samples: Vec::new(),
+                sample_rate: 0,
+                channels: 0,
+            },
+            audio_sync_offset_seconds: Rational::zero(),
+            preview: crate::model::PreviewSlice::default_window(),
+        };
+
+        // DDR → SSC: write the song as SSC text.
+        let ssc_text = write_string(&song_in);
+        // Full-row `M` pattern must be present in the SSC output.
+        assert!(
+            ssc_text.contains("MMMM"),
+            "SSC output must contain full-row M pattern for a Single BothSides shock"
+        );
+
+        // SSC → DDR: parse the SSC back, then serialize as SSQ and
+        // re-parse.
+        let re_parsed = ssc_to_ssq_to_ssq_parse(&ssc_text);
+        let chart = &re_parsed.song.charts[0];
+        let shock_count = chart
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Shock { .. }))
+            .count();
+        let mine_count = chart
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .count();
+        assert_eq!(
+            shock_count, 1,
+            "shock must survive full round-trip as a Shock note"
+        );
+        assert_eq!(
+            mine_count, 0,
+            "shock must NOT degenerate into per-panel mines"
+        );
+
+        // Finally: re-serialize once more and scan the bytes for
+        // any type-20 chunk header. A chart with only shocks and no
+        // per-panel mines must produce zero MINE_DATA chunks.
+        let events: Vec<crate::ssq::events::SsqEvent> = Vec::new();
+        let raw_pairs: Vec<(i32, i32)> = Vec::new();
+        let mut final_bytes = Vec::new();
+        crate::ssq::writer::write(&re_parsed.song, &events, &raw_pairs, &mut final_bytes).unwrap();
+        assert!(
+            !bytes_contain_mine_chunk(&final_bytes),
+            "round-tripped shock must not produce a MINE_DATA chunk"
+        );
+    }
+
+    /// Walk an SSQ byte sequence and return true if any chunk has
+    /// `type == 20` (MINE_DATA). Used by the shock-regression test
+    /// to assert that a shock-only song produces no mine chunks.
+    fn bytes_contain_mine_chunk(bytes: &[u8]) -> bool {
+        let mut off = 0;
+        while off + 6 <= bytes.len() {
+            let length = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+            if length == 0 {
+                return false; // terminator
+            }
+            let ty = u16::from_le_bytes(bytes[off + 4..off + 6].try_into().unwrap());
+            if ty == 20 {
+                return true;
+            }
+            off += length as usize;
+        }
+        false
+    }
+
+    #[test]
+    fn ssc_mixed_row_parse_produces_mine_and_tap_at_same_beat() {
+        // Row `M1M1` on Single: mines on Left + Up (bits 0+2, mask
+        // 0x05), taps on Down + Right (bits 1+3, mask 0x0A). Both
+        // notes at beat 0.
+        use crate::model::NoteKind;
+
+        let text = "\
+#BPMS:0.000=120.000;
+#STOPS:;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#NOTES:
+M1M1
+0000
+0000
+0000
+;
+";
+        let song = parse(text).unwrap();
+        let chart = &song.charts[0];
+        assert_eq!(chart.notes.len(), 2);
+
+        // Parser order: mine first (from classify_mine_row path), tap second.
+        assert_eq!(chart.notes[0].kind, NoteKind::Mine);
+        assert_eq!(chart.notes[0].panels.bits(), 0x05);
+
+        assert_eq!(chart.notes[1].kind, NoteKind::Tap);
+        assert_eq!(chart.notes[1].panels.bits(), 0x0A);
+
+        // Both at beat 0.
+        assert_eq!(chart.notes[0].beat, chart.notes[1].beat);
+    }
+
+    // ---------- DDR → SM5 integration (Task 5) ----------
+
+    /// Build a complete Song from charts and write it as SSQ, round
+    /// through the SSQ parser, and return the re-parsed result. Same
+    /// helper pattern as `ssc_to_ssq_to_ssq_parse` but for building
+    /// from scratch (not from an SSC string).
+    fn song_to_ssq_to_ssq_parse(song: &crate::model::Song) -> crate::ssq::SsqParseResult {
+        let events: Vec<crate::ssq::events::SsqEvent> = Vec::new();
+        let raw_pairs: Vec<(i32, i32)> = Vec::new();
+        let mut bytes = Vec::new();
+        crate::ssq::writer::write(song, &events, &raw_pairs, &mut bytes).unwrap();
+        crate::ssq::parse(&bytes).unwrap()
+    }
+
+    /// Minimal Song shell used by the round-trip tests — one tempo
+    /// segment at 120 BPM, TPS=1000, no stops, no audio.
+    fn mine_bearing_song(charts: Vec<crate::model::Chart>) -> crate::model::Song {
+        use crate::model::{AudioBuffer, Bpm, PreviewSlice, Song, TempoSegment};
+        Song {
+            title: None,
+            artist: None,
+            tps: 1000,
+            tempo_segments: vec![TempoSegment {
+                start_beat: crate::model::Beat::zero(),
+                bpm: Bpm::from_rational(Rational::from_integer(120)),
+            }],
+            stops: Vec::new(),
+            charts,
+            audio: AudioBuffer {
+                samples: Vec::new(),
+                sample_rate: 0,
+                channels: 0,
+            },
+            audio_sync_offset_seconds: Rational::zero(),
+            preview: PreviewSlice::default_window(),
+        }
+    }
+
+    #[test]
+    fn ddr_to_sm5_per_difficulty_mines_emits_m_chars_in_each_notedata() {
+        // Build a Song with two charts with distinct mine patterns,
+        // write as SSQ (Task 3 path), parse back (Task 3 attach),
+        // then write as SSC (Task 5 Mine arm) and inspect the text.
+        use crate::model::{Beat, Chart, Difficulty, Note, NoteKind, PanelSet, Style};
+
+        let basic = Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Basic,
+            notes: vec![Note {
+                beat: Beat::from_measure_ticks(0).unwrap(),
+                kind: NoteKind::Mine,
+                panels: PanelSet::from_bits(Style::Single, 0x01),
+            }],
+        };
+        let expert = Chart {
+            style: Style::Double,
+            difficulty: Difficulty::Expert,
+            notes: vec![Note {
+                beat: Beat::from_measure_ticks(2048).unwrap(),
+                kind: NoteKind::Mine,
+                panels: PanelSet::from_bits(Style::Double, 0x81),
+            }],
+        };
+        let song_in = mine_bearing_song(vec![basic, expert]);
+
+        // DDR write → parse → SSC write.
+        let re_parsed = song_to_ssq_to_ssq_parse(&song_in);
+        let mut ssc_buf: Vec<u8> = Vec::new();
+        write(&re_parsed.song, &mut ssc_buf).unwrap();
+        let ssc_text = String::from_utf8(ssc_buf).unwrap();
+
+        // Split by `#NOTEDATA:;` to inspect each chart's body in isolation.
+        let sections: Vec<&str> = ssc_text.split("#NOTEDATA:;").collect();
+        assert_eq!(sections.len(), 3, "song-level header + 2 notedata sections");
+        let basic_section = sections[1];
+        let expert_section = sections[2];
+
+        // Basic (Single): mine on P1 Left at beat 0 → first body row is `M000`.
+        assert!(
+            basic_section.contains("dance-single"),
+            "basic section should declare dance-single"
+        );
+        assert!(
+            basic_section.contains("M000"),
+            "Single Basic body must have M000 for Left-only mine at beat 0. body:\n{basic_section}"
+        );
+
+        // Expert (Double): mine at beat 2 on P1 Left + P2 Right →
+        // row `M000000M` at row 2 of measure 0 (a 4-row measure).
+        assert!(
+            expert_section.contains("dance-double"),
+            "expert section should declare dance-double"
+        );
+        assert!(
+            expert_section.contains("M000000M"),
+            "Double Expert body must have M000000M for L+R mine at beat 2. body:\n{expert_section}"
+        );
+    }
+
+    #[test]
+    fn ddr_to_sm5_to_ddr_mines_full_round_trip_is_byte_identical() {
+        // A Song with multiple mines across multiple beats, written as
+        // SSQ → parsed → written as SSC → parsed as SSC → written as
+        // SSQ. After normalization (writer's group-by-beat + sort),
+        // the second SSQ bytes should equal the first SSQ bytes.
+        use crate::model::{Beat, Chart, Difficulty, Note, NoteKind, PanelSet, Style};
+
+        let chart = Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Challenge,
+            notes: vec![
+                Note {
+                    beat: Beat::from_measure_ticks(0).unwrap(),
+                    kind: NoteKind::Mine,
+                    panels: PanelSet::from_bits(Style::Single, 0x01),
+                },
+                Note {
+                    beat: Beat::from_measure_ticks(1024).unwrap(),
+                    kind: NoteKind::Mine,
+                    panels: PanelSet::from_bits(Style::Single, 0x09),
+                },
+                Note {
+                    beat: Beat::from_measure_ticks(2048).unwrap(),
+                    kind: NoteKind::Mine,
+                    panels: PanelSet::from_bits(Style::Single, 0x04),
+                },
+            ],
+        };
+        let song_in = mine_bearing_song(vec![chart]);
+
+        // First SSQ write.
+        let events: Vec<crate::ssq::events::SsqEvent> = Vec::new();
+        let raw_pairs: Vec<(i32, i32)> = Vec::new();
+        let mut bytes1 = Vec::new();
+        crate::ssq::writer::write(&song_in, &events, &raw_pairs, &mut bytes1).unwrap();
+
+        // SSQ → SSC → SSC parse.
+        let parsed_ssq = crate::ssq::parse(&bytes1).unwrap();
+        let mut ssc_buf: Vec<u8> = Vec::new();
+        write(&parsed_ssq.song, &mut ssc_buf).unwrap();
+        let ssc_text = String::from_utf8(ssc_buf).unwrap();
+        let song_from_ssc = parse(&ssc_text).unwrap();
+
+        // Second SSQ write.
+        let mut bytes2 = Vec::new();
+        crate::ssq::writer::write(&song_from_ssc, &events, &raw_pairs, &mut bytes2).unwrap();
+
+        assert_eq!(
+            bytes1, bytes2,
+            "DDR → SM5 → DDR round-trip must produce byte-identical SSQ output for mines"
+        );
+    }
+
+    #[test]
+    fn sm5_to_ddr_to_sm5_mines_full_round_trip_preserves_mine_positions() {
+        // SSC with per-panel mines → SSQ write → SSQ parse → SSC write.
+        // The final SSC's Mine notes must have the same
+        // (beat_tick, panels.bits()) set as the original parse.
+        use crate::model::NoteKind;
+
+        let original_text = "\
+#TITLE:RoundTrip;
+#BPMS:0.000=120.000;
+#STOPS:;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#NOTES:
+M000
+0M0M
+0000
+M00M
+;
+";
+        let first_song = parse(original_text).unwrap();
+        let original_mines: Vec<(i32, u8)> = first_song.charts[0]
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .map(|n| {
+                let r = n.beat.as_rational();
+                let tick = ((r.num() * 1024) / r.den() as i64) as i32;
+                (tick, n.panels.bits())
+            })
+            .collect();
+        assert!(
+            !original_mines.is_empty(),
+            "test fixture must produce some mines; got none"
+        );
+
+        // SSC → SSQ → SSC.
+        let events: Vec<crate::ssq::events::SsqEvent> = Vec::new();
+        let raw_pairs: Vec<(i32, i32)> = Vec::new();
+        let mut ssq_bytes = Vec::new();
+        crate::ssq::writer::write(&first_song, &events, &raw_pairs, &mut ssq_bytes).unwrap();
+
+        let parsed_ssq = crate::ssq::parse(&ssq_bytes).unwrap();
+
+        let mut ssc_buf2: Vec<u8> = Vec::new();
+        write(&parsed_ssq.song, &mut ssc_buf2).unwrap();
+        let final_text = String::from_utf8(ssc_buf2).unwrap();
+        let final_song = parse(&final_text).unwrap();
+
+        let final_mines: Vec<(i32, u8)> = final_song.charts[0]
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, NoteKind::Mine))
+            .map(|n| {
+                let r = n.beat.as_rational();
+                let tick = ((r.num() * 1024) / r.den() as i64) as i32;
+                (tick, n.panels.bits())
+            })
+            .collect();
+
+        assert_eq!(
+            original_mines, final_mines,
+            "SM5 → DDR → SM5 round-trip must preserve mine positions and masks.\n\
+             original SSC:\n{original_text}\nfinal SSC:\n{final_text}"
         );
     }
 }

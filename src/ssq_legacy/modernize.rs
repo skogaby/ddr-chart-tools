@@ -60,7 +60,10 @@ pub fn modernize(result: &mut SsqParseResult) {
                 return;
             }
         };
-        pair.1 = match scale.scale_rounded(pair.1 as i64).and_then(|v| i32::try_from(v).ok()) {
+        pair.1 = match scale
+            .scale_rounded(pair.1 as i64)
+            .and_then(|v| i32::try_from(v).ok())
+        {
             Some(v) => v,
             None => {
                 log::warn!("modernize: tempo seconds-tick rescale overflow");
@@ -72,10 +75,7 @@ pub fn modernize(result: &mut SsqParseResult) {
     // Apply same shift (in measure-ticks, not rescaled) to event ticks
     // and step note beats — these are in measure-ticks which are
     // TPS-independent.
-    let shift_ticks_i32 = match i32::try_from(shift_ticks) {
-        Ok(v) => v,
-        Err(_) => 0,
-    };
+    let shift_ticks_i32 = i32::try_from(shift_ticks).unwrap_or_default();
     for ev in &mut result.events {
         ev.tick = ev.tick.saturating_add(shift_ticks_i32);
     }

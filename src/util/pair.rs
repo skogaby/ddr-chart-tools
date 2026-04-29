@@ -58,7 +58,9 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
             // audio siblings are `{id}.wavm`. Strip the `_all` suffix
             // from chart stems before pairing so they match.
             let stem = if matches!(format, Format::DdrLegacy) {
-                stem.strip_suffix("_all").map(str::to_string).unwrap_or(stem)
+                stem.strip_suffix("_all")
+                    .map(str::to_string)
+                    .unwrap_or(stem)
             } else {
                 stem
             };

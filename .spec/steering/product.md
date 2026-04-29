@@ -46,7 +46,8 @@ Terms that appear in code, CLI help text, and documentation:
 - **Origin-shift** — A non-zero `time_offset[0]` in a legacy tempo chunk, representing an offset between the chart's measure timeline and the audio-sync timeline. Normalized to 0 during modernization (see Business Rule 4).
 - **Sync offset / `--sync-offset-ms`** — A user-specified millisecond bias added to the audio-sync offset during modernization to compensate for per-target engine latency (e.g. Ultramix charts on DDR World commonly need ~+53 ms).
 - **Freeze / Hold** — A sustained note the player must hold. Represented differently in SSQ (freeze-info block) vs SSC (`H`/`2`/`3` note symbols).
-- **Shock / Mine** — Obstacle notes. Semantics differ between formats.
+- **Shock** — A full-row obstacle note covering one or both sides of the pad. In SSQ, encoded as a step-chunk byte `0xFF` (both sides), `0x0F` (P1 only), or `0xF0` (P2 only). In SSC, encoded as a row where every panel on the affected side is `M`.
+- **Mine** — A per-panel obstacle note. In SSQ, stored in a dedicated `MINE_DATA` chunk (kind 20, one per difficulty, see `docs/ssq_mine_chunk_format.md`). In SSC, encoded as one or more `M` characters on individual panels in a row, possibly coexisting with `1`/`2`/`3`/`4` on other panels. Distinct from a shock — a shock covers an entire side; a mine sits on specific panels.
 - **Batch mode** — Operation across every eligible pair of files in an input directory.
 - **Single mode** — Operation on one explicitly-named chartfile and audiofile pair.
 
@@ -56,7 +57,7 @@ These rules constrain implementation — violations are bugs, not style issues.
 
 1. **DDR_LEGACY is import-only.** The tool never emits legacy-format SSQs. Any code path that would produce a `--to-format DDR_LEGACY` is an error, detected and rejected at CLI parsing time.
 2. **SM5 output is always SSC.** When `--to-format SM5`, the stepfile written is SSC. SM is never an output.
-3. **Modern SSQs use TPS=1000.** When the tool writes an SSQ (either via `DDR_LEGACY → DDR` or `SM5 → DDR`), it must author with TPS=1000 and must emit only chunk types 1 (tempo), 2 (events), and 3 (steps). Auxiliary chunks (types 4, 5, 9, 17) are not produced.
+3. **Modern SSQs use TPS=1000.** When the tool writes an SSQ (either via `DDR_LEGACY → DDR` or `SM5 → DDR`), it must author with TPS=1000 and must emit only chunk types 1 (tempo), 2 (events), 3 (steps), and — when the input has per-panel ITG-style mines — 20 (MINE_DATA, per `docs/ssq_mine_chunk_format.md`). Auxiliary chunks (types 4, 5, 9, 17) are not produced.
 4. **Legacy timelines normalize to a zero origin.** When converting `DDR_LEGACY → DDR` or `DDR_LEGACY → SM5`, the tempo, event, and step timelines are shifted so the first tempo entry sits at beat 0. Any legacy-only chunks that reached the parser are discarded. The tool logs what was dropped; it does not attempt to preserve them.
 5. **Audio conversion is automatic and paired with the chart.** Whenever a chart is converted, its audio is converted alongside it in the same run. Users never have to invoke audio conversion separately.
 6. **Flat input directories only.** In batch mode, only files directly in the input folder are considered. Subdirectories are not scanned.

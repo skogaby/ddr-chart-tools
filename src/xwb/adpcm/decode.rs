@@ -29,8 +29,7 @@ const COEFFS: [(i32, i32); 7] = [
 
 /// Adaptation table indexed by unsigned nibble value (0..16).
 const ADAPT: [i32; 16] = [
-    230, 230, 230, 230, 307, 409, 512, 614,
-    768, 614, 512, 409, 307, 230, 230, 230,
+    230, 230, 230, 230, 307, 409, 512, 614, 768, 614, 512, 409, 307, 230, 230, 230,
 ];
 
 /// Per-channel decoder state.
@@ -237,11 +236,11 @@ mod tests {
         let fmt = mono_format();
         let pcm = decode(&block, &fmt).unwrap();
 
-        assert_eq!(pcm[0], 200);  // s2
-        assert_eq!(pcm[1], 500);  // s1
-        assert_eq!(pcm[2], 300);  // nibble=3, signed=3, 3*100=300
-        // After frame 0: delta = max(16, (100*ADAPT[3])>>8) = max(16, (100*230)>>8) = 89
-        assert_eq!(pcm[3], 89);   // nibble=1, signed=1, 1*89=89
+        assert_eq!(pcm[0], 200); // s2
+        assert_eq!(pcm[1], 500); // s1
+        assert_eq!(pcm[2], 300); // nibble=3, signed=3, 3*100=300
+                                 // After frame 0: delta = max(16, (100*ADAPT[3])>>8) = max(16, (100*230)>>8) = 89
+        assert_eq!(pcm[3], 89); // nibble=1, signed=1, 1*89=89
     }
 
     #[test]
@@ -251,18 +250,18 @@ mod tests {
         // Predictors
         block.push(2); // ch0
         block.push(2); // ch1
-        // Deltas
+                       // Deltas
         block.extend_from_slice(&1i16.to_le_bytes()); // ch0
         block.extend_from_slice(&1i16.to_le_bytes()); // ch1
-        // Sample1
+                                                      // Sample1
         block.extend_from_slice(&100i16.to_le_bytes()); // ch0
         block.extend_from_slice(&200i16.to_le_bytes()); // ch1
-        // Sample2
+                                                        // Sample2
         block.extend_from_slice(&10i16.to_le_bytes()); // ch0
         block.extend_from_slice(&20i16.to_le_bytes()); // ch1
-        // Nibble data: all zeros
-        // For 2ch, 128spb: block_align = (48+22)*2 = 140, header = 14
-        // nibble bytes = 140 - 14 = 126
+                                                       // Nibble data: all zeros
+                                                       // For 2ch, 128spb: block_align = (48+22)*2 = 140, header = 14
+                                                       // nibble bytes = 140 - 14 = 126
         block.resize(140, 0);
 
         // Use the DDR format (2ch)

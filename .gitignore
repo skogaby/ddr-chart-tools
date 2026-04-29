@@ -31,4 +31,4 @@ packet-logs/
 .spec/workflow/**/*.csv
 .spec/workflow/**/*.json
 
-ref/
+.kiro/
