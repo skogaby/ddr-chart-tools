@@ -1,6 +1,6 @@
 # Tasks: 20260429-ddr-mines-support
 
-Tasks are sized to be independently reviewable and buildable. Per project Learning 1, the software-developer chains tasks within a single session (approval check-ins between tasks, no hand-back to EM). Per project Learning 2, no git operations or CR flow are involved — the user handles checkpoint commits externally.
+Tasks are sized to be independently reviewable and buildable. Per project Learning 1, the sdd-software-developer chains tasks within a single session (approval check-ins between tasks, no hand-back to EM). Per project Learning 2, no git operations or CR flow are involved — the user handles checkpoint commits externally.
 
 Per project Learning 5, all tests use synthetic in-code fixtures built from `docs/ssq_format.md` and `docs/ssq_mine_chunk_format.md` byte layouts. No real Konami/community assets.
 

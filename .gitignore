@@ -31,4 +31,5 @@ packet-logs/
 .spec/workflow/**/*.csv
 .spec/workflow/**/*.json
 
-.kiro/
+# Claude Code
+.claude/settings.local.json

@@ -109,7 +109,7 @@ This feature is tool-side only. The consuming DLL mod (`NoteTypesExpansion`) is 
 - [ ] A DDR→DDR round-trip test (synthetic SSQ in, SSQ out) preserves the MINE_DATA chunks per-difficulty, subject to the writer's sort-order normalization (ascending `beat_count`, ties on `panels` ascending). Each chunk's output bytes are asserted against regenerated expected byte sequences, not against input bytes — the writer is allowed to re-order entries within a chunk.
 - [ ] A shock-round-trip regression test still passes: an SSC with a full-row `MMMM` row, taken DDR→SM5→DDR→SM5, reproduces the full-row `MMMM` row on each SSC pass. The feature's new code paths do not accidentally split full-row shocks into per-panel mines.
 - [ ] A "vanilla SSQ" test (an SSQ with no MINE_DATA chunk) continues to parse and write successfully, producing no MINE_DATA chunk on output. Existing `initial-deliverable` tests remain green.
-- [ ] All mine-related tests use synthetic fixtures built in-code from the byte layouts in `docs/ssq_mine_chunk_format.md` and `docs/ssq_format.md`. No real Konami assets, no real community charts, no on-disk fixtures beyond what is checked in to `tests/fixtures/`. (Consistent with Learning 5 in `.spec/learnings/software-developer.md`.)
+- [ ] All mine-related tests use synthetic fixtures built in-code from the byte layouts in `docs/ssq_mine_chunk_format.md` and `docs/ssq_format.md`. No real Konami assets, no real community charts, no on-disk fixtures beyond what is checked in to `tests/fixtures/`. (Consistent with Learning 5 in `.spec/learnings/sdd-software-developer.md`.)
 
 ### US-6: Vanilla-compatibility guarantee
 
@@ -181,7 +181,7 @@ These are flagged for the design phase (principal engineer) to resolve where a c
 
 - One MINE_DATA chunk per difficulty, per file. Each chunk's `param2` matches exactly one step chunk's `param2`. If multiple MINE_DATA chunks share the same `param2` (malformed input), the first is accepted and subsequent duplicates are warned+skipped.
 - Mines do not participate in freeze/hold resolution. A `0x00` step byte never ends a mine — mines are not step-chunk data and are completely independent of the freeze-block parser state.
-- Mines do not contribute to BPM calculation, tempo-chunk `tempo_data[]` synthesis, or the `finish-bracketing-guard` logic from Learning 11 (`software-developer.md`). The last-chart-beat calculation for the FINISH guard may include mine beats — that is a design-phase decision (principal engineer).
+- Mines do not contribute to BPM calculation, tempo-chunk `tempo_data[]` synthesis, or the `finish-bracketing-guard` logic from Learning 11 (`sdd-software-developer.md`). The last-chart-beat calculation for the FINISH guard may include mine beats — that is a design-phase decision (principal engineer).
 - Mine writing is additive: a chart with zero mines produces byte-identical output to a chart authored before this feature. Existing initial-deliverable tests stay green.
 - The feature ships as a single user-approved unit. No phased rollout; the DDR→DDR, DDR→SM5, SM5→DDR paths all learn about mines together.
 

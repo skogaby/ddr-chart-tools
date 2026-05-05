@@ -1,4 +1,4 @@
-# Learnings: software-developer
+# Learnings: sdd-software-developer
 
 ## Learning 1
 - **Context**: Working on the ddr-chart-tools project (solo hobby project, no team, user is sole arbiter)
