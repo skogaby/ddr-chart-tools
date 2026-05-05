@@ -586,7 +586,19 @@ fn synthesize_events(
 }
 
 /// Append a synthesized trailing tempo pair at `end_tick`, extrapolating
-/// seconds-ticks linearly from the last real tempo segment.
+/// seconds-ticks linearly from the last non-stop tempo segment.
+///
+/// "Non-stop" means a pair-pair interval where consecutive pairs have
+/// distinct measure-ticks (`dt > 0`). Stops are encoded as a pair-pair
+/// with `dt == 0` and a non-zero seconds-tick delta — they represent a
+/// pause in the audio timeline rather than a rate, so they can't be
+/// used to extrapolate continuing tempo. When the input's final pair
+/// is the closing pair of a stop, we walk backward to the last segment
+/// with `dt > 0` and use its rate.
+///
+/// Extrapolation is always applied on top of the *last pair's*
+/// seconds-ticks (not the referenced segment's s0), so any stop delays
+/// that preceded the last pair are correctly preserved.
 fn extend_tempo_pairs_to(pairs: &[(i32, i32)], end_tick: i32) -> Vec<(i32, i32)> {
     let mut out = pairs.to_vec();
     let n = out.len();
@@ -598,18 +610,28 @@ fn extend_tempo_pairs_to(pairs: &[(i32, i32)], end_tick: i32) -> Vec<(i32, i32)>
         }
         return out;
     }
-    let (t0, s0) = out[n - 2];
-    let (t1, s1) = out[n - 1];
+    // Walk backward to find the last pair-pair interval with dt > 0.
+    // This skips over stop pair-pairs (dt == 0) at the tail.
+    let rate_segment = (1..n).rev().find(|&i| out[i].0 != out[i - 1].0);
+    let (t0, s0, t1, s1) = match rate_segment {
+        Some(i) => (out[i - 1].0, out[i - 1].1, out[i].0, out[i].1),
+        None => {
+            // All pairs share the same tick — pathological input; keep
+            // seconds-tick constant so callers don't choke.
+            if let Some(last) = out.last().copied() {
+                out.push((end_tick, last.1));
+            }
+            return out;
+        }
+    };
     let dt = (t1 - t0) as i64;
     let ds = (s1 - s0) as i64;
-    // seconds-ticks per measure-tick in the last segment
-    let extra_ticks = (end_tick - t1) as i64;
-    let extra_seconds = if dt != 0 {
-        (ds * extra_ticks + dt / 2) / dt
-    } else {
-        0
-    };
-    let new_s = (s1 as i64 + extra_seconds).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let last_tick = out[n - 1].0 as i64;
+    let last_seconds = out[n - 1].1 as i64;
+    let extra_ticks = end_tick as i64 - last_tick;
+    // dt > 0 is guaranteed by the find() predicate above.
+    let extra_seconds = (ds * extra_ticks + dt / 2) / dt;
+    let new_s = (last_seconds + extra_seconds).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     out.push((end_tick, new_s));
     out
 }
@@ -875,6 +897,43 @@ mod tests {
         let out = extend_tempo_pairs_to(&pairs, 5000);
         assert_eq!(out.len(), 2);
         assert_eq!(out[1], (5000, 100));
+    }
+
+    #[test]
+    fn extend_tempo_pairs_extrapolates_past_trailing_stop() {
+        // Regression: source pairs end with a stop (same-tick pair with
+        // non-zero seconds-tick delta). The last *segment* with a real
+        // rate is pairs[n-3] → pairs[n-2]; we must use that to
+        // extrapolate past the stop's closing pair.
+        //
+        // Shape modelled on the Xuxa (SM5→DDR) chart that uncovered this
+        // bug: a BPM=160 segment followed by a 0.375s stop, then the
+        // caller asks for extension past the stop to the END tick.
+        //
+        // pairs[-3]: (317440, 117369)  — start of last BPM=160 segment
+        // pairs[-2]: (318464, 117744)  — end of that segment
+        // pairs[-1]: (318464, 118119)  — stop-end (same tick, +375 ticks)
+        //
+        // Extending to tick 331776:
+        //   last segment rate: ds/dt = 375/1024 per measure-tick
+        //   extra_ticks = 331776 - 318464 = 13312
+        //   extra_seconds = 13312 * 375 / 1024 = 4875
+        //   new pair's seconds-ticks = 118119 + 4875 = 122994
+        let pairs = vec![(317440, 117369), (318464, 117744), (318464, 118119)];
+        let out = extend_tempo_pairs_to(&pairs, 331776);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[3], (331776, 122994));
+    }
+
+    #[test]
+    fn extend_tempo_pairs_all_same_tick_falls_back_gracefully() {
+        // Pathological: every pair has the same measure-tick (no
+        // non-stop segment anywhere). We can't extrapolate a rate;
+        // fall back to keeping seconds-tick constant.
+        let pairs = vec![(500, 100), (500, 200), (500, 300)];
+        let out = extend_tempo_pairs_to(&pairs, 1000);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[3], (1000, 300));
     }
 
     #[test]
