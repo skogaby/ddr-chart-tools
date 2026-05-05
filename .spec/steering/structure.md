@@ -13,7 +13,6 @@ ddr-chart-tools/
 │   └── config.toml         # cross-compilation linker config (Windows target)
 ├── .gitignore
 ├── .spec/
-│   ├── workspace-manifest.json
 │   ├── steering/           # these files
 │   └── workflow/           # per-feature workflows
 ├── docs/
