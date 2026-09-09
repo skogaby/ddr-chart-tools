@@ -73,10 +73,11 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Add this many milliseconds to the audio-sync offset. Positive
-    /// values shift the audio later relative to beat 0 (equivalent to
-    /// adding to `#OFFSET` in SSC / `tempo_data[0]` in SSQ). Use to
-    /// correct for consistent per-platform sync bias (e.g. Ultramix
-    /// charts on DDR World commonly need ~+53ms).
+    /// values delay the chart relative to the audio: beat 0 lands N ms
+    /// later in the audio (adds N to `tempo_data[0]` in SSQ, subtracts
+    /// N/1000 from `#OFFSET` in SSC). Use to correct for consistent
+    /// per-platform sync bias (e.g. Ultramix charts on DDR World
+    /// commonly need ~+53ms).
     #[arg(long, allow_hyphen_values = true)]
     pub sync_offset_ms: Option<i32>,
 }

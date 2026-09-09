@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use log::{info, warn};
+use thiserror::Error;
 
 use crate::cli::job::{Format, Job};
 use crate::error::Error;
@@ -24,6 +25,37 @@ use crate::xsb;
 use crate::xwb;
 use crate::xwb::adpcm;
 use crate::xwb::container::{WaveFormat, XwbBank, XwbEntry};
+
+/// Sample rates accepted for DDR World song wave banks. The XWB entry
+/// header carries the rate (18-bit field), and the game's audio engine
+/// (`xactengine2_10`) reads it per wave and sample-rate-converts into its
+/// fixed 44.1 kHz mix buffer. The chart clock in `gamemdx` is a wall-clock
+/// delta and never consults the rate, so any rate the engine can decode
+/// stays in sync. Stock content is 44.1 kHz; 48 kHz is the other rate
+/// StepMania packs commonly ship at. Anything else is almost certainly a
+/// mistake (a downsampled preview, a voice clip) and is refused.
+const DDR_SAMPLE_RATES: [u32; 2] = [44_100, 48_000];
+/// Channel count DDR World's song wave banks are authored at. The ADPCM
+/// encoder de-interleaves by this count, so any other layout would be
+/// scrambled.
+const DDR_CHANNELS: u16 = 2;
+
+/// Orchestration-level failures that are not attributable to one format
+/// module.
+#[derive(Debug, Error)]
+pub enum JobError {
+    #[error(
+        "DDR audio must be one of {DDR_SAMPLE_RATES:?} Hz, got {sample_rate} Hz \
+         (resample the source before converting — this tool will not do it silently)"
+    )]
+    UnsupportedSampleRate { sample_rate: u32 },
+
+    #[error(
+        "DDR audio must have {DDR_CHANNELS} channels, got {channels} \
+         (remix the source before converting — this tool will not do it silently)"
+    )]
+    WrongChannelCount { channels: u16 },
+}
 
 /// Execute one conversion job.
 pub fn run_one(job: &Job) -> Result<(), Error> {
@@ -214,10 +246,12 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
 }
 
 /// Add a user-specified sync offset (in milliseconds) to the post-modernize
-/// audio-sync state. Applied to both `audio_sync_offset_seconds` (consumed
-/// by the SSC writer as `#OFFSET`) and `raw_tempo_pairs[0].1` (consumed by
-/// the SSQ writer as `tempo_data[0]`). Modernize runs first, so `song.tps`
-/// is already 1000 and seconds-ticks are directly in milliseconds.
+/// audio-sync state. Applied to both `audio_sync_offset_seconds` (which the
+/// SSC writer negates into `#OFFSET`) and `raw_tempo_pairs[0].1` (emitted
+/// verbatim by the SSQ writer as `tempo_data[0]`). Both carry the DDR sign
+/// convention — positive = beat 0 later in the audio — so the same signed
+/// value is added to each. Modernize runs first, so `song.tps` is already
+/// 1000 and seconds-ticks are directly in milliseconds.
 fn apply_sync_offset(result: &mut crate::ssq::SsqParseResult, offset_ms: i32) {
     if offset_ms == 0 {
         return;
@@ -330,9 +364,36 @@ fn decode_legacy_audio(bytes: &[u8]) -> Result<AudioBuffer, Error> {
     Ok(wavm::parse(bytes)?)
 }
 
-/// DDR-format WaveFormat: ADPCM, 2ch, 44100Hz, raw_align=48.
-fn ddr_wave_format() -> WaveFormat {
-    WaveFormat::from_packed(2 | (2 << 2) | (44100 << 5) | (48 << 23))
+/// DDR-format WaveFormat: ADPCM, 2ch, raw_align=48, at the given sample
+/// rate. Only the rate varies; codec, layout, and block alignment are the
+/// fixed profile DDR's authoring tool emits.
+fn ddr_wave_format(sample_rate: u32) -> WaveFormat {
+    WaveFormat::from_packed(2 | ((DDR_CHANNELS as u32) << 2) | (sample_rate << 5) | (48 << 23))
+}
+
+/// Whether a wave-format sample rate is one this tool will put in a DDR
+/// song bank. See [`DDR_SAMPLE_RATES`] for why the set is closed.
+fn is_accepted_ddr_rate(sample_rate: u32) -> bool {
+    DDR_SAMPLE_RATES.contains(&sample_rate)
+}
+
+/// Reject PCM whose rate or layout can't be encoded into a DDR song bank.
+/// The header is derived from the buffer's rate, so a rate mismatch is
+/// not a speed bug any more — the check exists to refuse inputs that are
+/// almost certainly wrong (see [`DDR_SAMPLE_RATES`]) and to keep the
+/// channel layout the ADPCM encoder assumes.
+fn validate_ddr_audio(audio: &AudioBuffer) -> Result<(), JobError> {
+    if !is_accepted_ddr_rate(audio.sample_rate) {
+        return Err(JobError::UnsupportedSampleRate {
+            sample_rate: audio.sample_rate,
+        });
+    }
+    if audio.channels != DDR_CHANNELS {
+        return Err(JobError::WrongChannelCount {
+            channels: audio.channels,
+        });
+    }
+    Ok(())
 }
 
 /// Encode audio + preview and write XWB + XSB.
@@ -343,7 +404,14 @@ fn write_ddr_audio(
     xwb_path: &Path,
     xsb_path: &Path,
 ) -> Result<(), Error> {
-    let fmt = ddr_wave_format();
+    validate_ddr_audio(audio)?;
+    let fmt = ddr_wave_format(audio.sample_rate);
+    info!(
+        "encoding {} Hz {}ch PCM to MS-ADPCM (bank declares {} Hz)",
+        audio.sample_rate,
+        audio.channels,
+        fmt.sample_rate()
+    );
 
     // Encode main audio.
     let main_adpcm = adpcm::encode::encode(&audio.samples, &fmt)?;
@@ -455,10 +523,12 @@ fn try_audio_passthrough(
         return Ok(false);
     }
 
-    // Both entries must be DDR-format ADPCM.
-    let expected_fmt = ddr_wave_format();
+    // Both entries must be DDR-profile ADPCM at an accepted rate: the
+    // codec/layout/alignment must equal what we'd write ourselves for
+    // that rate, so anything the encoder wouldn't produce is re-encoded.
     for entry in &bank.entries {
-        if entry.format != expected_fmt {
+        let rate = entry.format.sample_rate();
+        if !is_accepted_ddr_rate(rate) || entry.format != ddr_wave_format(rate) {
             return Ok(false);
         }
     }
@@ -665,6 +735,86 @@ mod tests {
             audio_sync_offset_seconds: Rational::zero(),
             preview: PreviewSlice::default_window(),
         }
+    }
+
+    // ---------- validate_ddr_audio ----------
+
+    fn audio(sample_rate: u32, channels: u16) -> AudioBuffer {
+        AudioBuffer {
+            samples: vec![0; 256 * channels as usize],
+            sample_rate,
+            channels,
+        }
+    }
+
+    #[test]
+    fn ddr_audio_accepts_44100_stereo() {
+        assert!(validate_ddr_audio(&audio(44_100, 2)).is_ok());
+    }
+
+    #[test]
+    fn ddr_audio_accepts_48000_stereo() {
+        // 48 kHz is carried natively: the header declares it and the
+        // engine resamples at playback. Previously this was mislabelled
+        // as 44.1 kHz and played ~9% slow.
+        assert!(validate_ddr_audio(&audio(48_000, 2)).is_ok());
+    }
+
+    #[test]
+    fn ddr_audio_rejects_unlisted_rate() {
+        let err = validate_ddr_audio(&audio(22_050, 2)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                JobError::UnsupportedSampleRate {
+                    sample_rate: 22_050
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ddr_audio_rejects_mono() {
+        let err = validate_ddr_audio(&audio(44_100, 1)).unwrap_err();
+        assert!(
+            matches!(err, JobError::WrongChannelCount { channels: 1 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ddr_audio_reports_sample_rate_before_channels() {
+        // Both wrong: the rate is the more likely root cause, so it is
+        // what the user sees first.
+        let err = validate_ddr_audio(&audio(22_050, 1)).unwrap_err();
+        assert!(matches!(err, JobError::UnsupportedSampleRate { .. }));
+    }
+
+    #[test]
+    fn ddr_wave_format_carries_buffer_rate() {
+        // The header must declare the buffer's real rate — this is the
+        // whole fix for the "plays slow" bug — and the fixed parts of
+        // the profile must not change with it.
+        for &rate in &DDR_SAMPLE_RATES {
+            let fmt = ddr_wave_format(rate);
+            assert_eq!(fmt.sample_rate(), rate);
+            assert_eq!(u16::from(fmt.channels()), DDR_CHANNELS);
+            assert_eq!(fmt.codec(), WaveFormat::CODEC_ADPCM);
+            assert_eq!(fmt.block_align_raw(), 48);
+            assert_eq!(fmt.samples_per_block(), 128);
+        }
+    }
+
+    #[test]
+    fn ddr_wave_format_48k_survives_container_round_trip() {
+        // 48000 must fit the 18-bit rate field without clobbering
+        // neighbouring fields once packed and unpacked.
+        let fmt = ddr_wave_format(48_000);
+        let again = WaveFormat::from_packed(fmt.packed());
+        assert_eq!(again, fmt);
+        assert_eq!(again.sample_rate(), 48_000);
+        assert_eq!(again.block_align(), 140);
     }
 
     /// Given synthesized events, extract (FINISH tick, END tick).

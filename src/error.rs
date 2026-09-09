@@ -36,6 +36,9 @@ pub enum Error {
     #[error("SE bank error: {0}")]
     SeBank(#[from] crate::job::se_bank::SeBankError),
 
+    #[error("job error: {0}")]
+    Job(#[from] crate::job::JobError),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

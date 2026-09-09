@@ -216,6 +216,10 @@ pub struct Song {
     /// Offset between chart time-zero and audio time-zero. Positive
     /// means audio has elapsed `audio_sync_offset_seconds` of pre-roll
     /// by the time the chart reaches beat zero.
+    ///
+    /// This is the DDR convention (`tempo_data[0] / TPS`). StepMania's
+    /// `#OFFSET` is the *negation* of this value; the SSC parser and
+    /// writer flip the sign at that boundary and nowhere else.
     pub audio_sync_offset_seconds: Rational,
     pub preview: PreviewSlice,
 }

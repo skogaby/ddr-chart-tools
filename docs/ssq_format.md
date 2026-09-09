@@ -149,7 +149,24 @@ Exactly one per file. This is the authoritative source of both tempo changes and
 
   A positive `tempo_data[0]` means the tempo-time axis starts partway through
   an audio pre-roll — by the time the chart reaches tick 0, `tempo_data[0] / TPS`
-  seconds of audio time have already elapsed.
+  seconds of audio time have already elapsed. Equivalently: `tempo_data[0]`
+  is simply element 0 of the same array whose later elements give the audio
+  time at which each `time_offset[i]` occurs. It is not a special-cased
+  field with its own sign; it is the audio time of measure tick 0.
+
+  **Relationship to StepMania `#OFFSET`.** StepMania places beat 0 at music
+  time `−#OFFSET` seconds, so the two formats describe the same quantity
+  with opposite signs:
+
+  ```
+  tempo_data[0] = −#OFFSET × TPS
+  #OFFSET       = −tempo_data[0] / TPS
+  ```
+
+  A simfile with `#OFFSET:-0.250;` (beat 0 is 250 ms into the audio) becomes
+  `tempo_data[0] = 250` at TPS=1000. Copying `#OFFSET` into `tempo_data[0]`
+  without negating produces a `2 × |#OFFSET|` desync — the chart runs early
+  by twice the offset.
 
 Total body size: `8N` bytes.
 Total chunk size: `12 + 8N` bytes (always a multiple of 4).
@@ -616,5 +633,18 @@ Each note carries per-panel hit flags and per-panel freeze durations. The freeze
 2. **Type 5 per-tag semantics** — layout is fully decoded (§7) and round-trips byte-for-byte, but the semantics of each section-A/B tag are not established.
 3. **Type 9 metadata format** — only one known sample. A larger corpus might clarify whether this chunk has a stable schema.
 4. **Type 17 section semantics** — layout is known but the gameplay effect is not.
-5. **`tempo_data[0]` exact sign convention** — §3 describes the value as a seconds-ticks audio-sync offset. The exact direction convention (does a positive value delay the chart, or delay the audio?) is inferred but not confirmed by live testing.
+5. **`tempo_data[0]` exact sign convention** — *Resolved.* A positive value
+   places beat 0 later in the audio (the chart is delayed relative to the
+   audio), as §3.1 describes. Three independent lines of evidence agree:
+   (a) `tempo_data[i]` for `i ≥ 1` is unambiguously the audio time at which
+   `time_offset[i]` occurs — that is what the BPM derivation in §3.2 and the
+   runtime interpolation in §3.4 consume — and element 0 is not treated
+   differently by the runtime; (b) the established DDR→StepMania converter
+   convention, independently implemented by `DDRDataExtractionTool`
+   (`OFFSET = −musicCount(beat 0)`), which produces SSC output verified
+   against the game's integer-millisecond note timing; (c) the observed
+   symptom when this tool stored `#OFFSET` verbatim — SM5→DDR output desynced
+   by `2 × |#OFFSET|` while DDR→SM5 output looked correct, which is exactly
+   what an inverted sign predicts given that modern `tempo_data[0]` is bounded
+   to ±22 ms but simfile offsets commonly reach several hundred ms.
 6. **Code-1 events** — the step parser silently ignores them. Their purpose is unknown; they may be reserved for an external system or a future feature.

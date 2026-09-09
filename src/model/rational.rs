@@ -100,11 +100,16 @@ impl Rational {
     }
 
     pub fn sub(&self, other: &Self) -> Result<Self, RationalError> {
-        let neg = Self::new(
-            other.num.checked_neg().ok_or(RationalError::Overflow)?,
-            other.den.get() as i64,
-        )?;
-        self.add(&neg)
+        self.add(&other.neg()?)
+    }
+
+    /// Additive inverse. Fails only for `i64::MIN / den`, which has no
+    /// representable negation.
+    pub fn neg(&self) -> Result<Self, RationalError> {
+        Ok(Self {
+            num: self.num.checked_neg().ok_or(RationalError::Overflow)?,
+            den: self.den,
+        })
     }
 
     pub fn mul(&self, other: &Self) -> Result<Self, RationalError> {
@@ -258,6 +263,21 @@ mod tests {
     #[test]
     fn sub_produces_negative() {
         assert_eq!(r(1, 3).sub(&r(1, 2)).unwrap(), r(-1, 6));
+    }
+
+    #[test]
+    fn neg_flips_sign_and_keeps_denominator() {
+        assert_eq!(r(123, 1000).neg().unwrap(), r(-123, 1000));
+        assert_eq!(r(-5, 2).neg().unwrap(), r(5, 2));
+        assert_eq!(Rational::zero().neg().unwrap(), Rational::zero());
+    }
+
+    #[test]
+    fn neg_of_i64_min_is_overflow() {
+        assert_eq!(
+            Rational::from_integer(i64::MIN).neg(),
+            Err(RationalError::Overflow)
+        );
     }
 
     #[test]

@@ -77,6 +77,12 @@ Legacy-only chunks are dropped and logged. The output SSQs use the modern author
 
 Converted legacy charts are often played by a different audio engine than the one that produced them. That engine's pipeline latency shows up as a consistent sync bias — in practice, **Ultramix → DDR World** output drifts ~53 ms and benefits from `--sync-offset-ms 53`. Use 0 (or omit the flag) when you want the raw, unadjusted sync; tune per-target if your platform needs a different constant.
 
+A positive value delays the chart relative to the audio (beat 0 lands N ms later in the song). In SSQ terms it adds N to `tempo_data[0]`; in SSC terms it subtracts N/1000 from `#OFFSET` — the two formats describe the same quantity with opposite signs, and the tool handles that conversion for you.
+
+### SM5 → DDR audio requirements
+
+The source OGG must decode to **2 channels at 44100 or 48000 Hz**. The wave bank header carries the source rate, and DDR World's audio engine reads it per entry and resamples at playback, so 48 kHz packs convert without a separate resampling step (an earlier version of the tool stamped every bank as 44.1 kHz, which made 48 kHz sources play ~9% slow). Other rates and mono sources are rejected with an error rather than being resampled or remixed silently — convert those before running the tool.
+
 ### Ultramix asset extraction
 
 DDR Ultramix (Xbox) packs all of its assets into a pair of archives (`x_data_US.bin` and `music_US.sng`). The `scripts/extract_ultramix_xdata.py` script unpacks those into individual files ready to feed into batch mode:
@@ -137,7 +143,7 @@ wrong type is rejected outright rather than merely misbehaving.
 - **WAVM** — Headerless XBOX-IMA ADPCM audio (2ch, 44.1 kHz). Ultramix-era audio format.
 - **SSC** — StepMania 5's simfile format. The tool's only SM5 output.
 - **SM** — StepMania's older simfile format. Accepted as input (when `--from-format SM5`); never written.
-- **OGG** — Ogg Vorbis audio. StepMania 5's standard audio format.
+- **OGG** — Ogg Vorbis audio. StepMania 5's standard audio format. As SM5→DDR input it must be stereo at 44.1 or 48 kHz (see "SM5 → DDR audio requirements").
 
 ## Installation
 

@@ -132,7 +132,11 @@ pub fn write(song: &Song, out: &mut impl Write) -> Result<(), SscError> {
     writeln!(out, "#VERSION:0.83;").map_err(io)?;
     write_str_tag(out, "TITLE", song.title.as_deref().unwrap_or(""))?;
     write_str_tag(out, "ARTIST", song.artist.as_deref().unwrap_or(""))?;
-    write_decimal_tag(out, "OFFSET", song.audio_sync_offset_seconds)?;
+    write_decimal_tag(
+        out,
+        "OFFSET",
+        model_offset_to_sm(song.audio_sync_offset_seconds)?,
+    )?;
     write_bpms(out, &song.tempo_segments)?;
     write_stops(out, &song.stops)?;
     write_decimal_tag(out, "SAMPLESTART", song.preview.start_seconds)?;
@@ -190,6 +194,38 @@ fn write_stops(out: &mut impl Write, stops: &[crate::model::Stop]) -> Result<(),
         .map_err(io)?;
     }
     writeln!(out, ";").map_err(io)
+}
+
+// -----------------------------------------------------------------------
+// `#OFFSET` sign convention
+// -----------------------------------------------------------------------
+//
+// StepMania and DDR describe the same quantity — where beat 0 sits in the
+// audio — with opposite signs:
+//
+// - StepMania: beat 0 occurs at music time `-#OFFSET`. A typical
+//   `#OFFSET:-0.250;` means beat 0 is 250 ms into the audio.
+// - DDR / the model: `tempo_data[0] / TPS` (and therefore
+//   `Song::audio_sync_offset_seconds`) is the audio time at which beat 0
+//   occurs. The same song is `tempo_data[0] = +250` at TPS=1000.
+//
+// The model keeps the DDR convention, so the SSC parser and writer are
+// the only places that negate. Getting this wrong produces a desync of
+// `2 × |#OFFSET|` — hundreds of milliseconds for ordinary simfiles.
+
+/// Convert an SM `#OFFSET` value into the model's audio-sync offset.
+fn sm_offset_to_model(sm_offset_seconds: Rational) -> Result<Rational, SscError> {
+    sm_offset_seconds.neg().map_err(|e| SscError::InvalidValue {
+        tag: "OFFSET".to_string(),
+        reason: format!("cannot negate: {e}"),
+    })
+}
+
+/// Convert the model's audio-sync offset into an SM `#OFFSET` value.
+fn model_offset_to_sm(audio_sync_offset_seconds: Rational) -> Result<Rational, SscError> {
+    audio_sync_offset_seconds
+        .neg()
+        .map_err(|e| SscError::Write(format!("cannot negate #OFFSET: {e}")))
 }
 
 /// Format a `Rational` as a fixed-point decimal with 6 fractional digits.
@@ -262,13 +298,26 @@ pub(crate) fn apply_song_tag(
             }
         }
         "OFFSET" => {
-            song.audio_sync_offset_seconds = parse_decimal_seconds(tag, v)?;
+            song.audio_sync_offset_seconds = sm_offset_to_model(parse_decimal_seconds(tag, v)?)?;
         }
         "BPMS" => {
             song.tempo_segments = parse_bpms(v)?;
         }
         "STOPS" => {
             song.stops = parse_stops(v)?;
+        }
+        "DELAYS" | "WARPS" => {
+            // Both alter the beat↔time map after their position, so
+            // dropping a non-empty one desyncs everything that follows.
+            // The model has no representation for either; DDR SSQ has no
+            // equivalent construct. Empty values (`#DELAYS:;`) are the
+            // norm in SSC files and are not worth a warning.
+            if !v.is_empty() {
+                log::warn!(
+                    "#{tag} is not supported and was dropped; chart timing after \
+                     the first entry will be wrong: {v:?}"
+                );
+            }
         }
         "SAMPLESTART" => {
             song.preview.start_seconds = parse_decimal_seconds(tag, v)?;
@@ -347,6 +396,15 @@ fn parse_bpms(s: &str) -> Result<Vec<crate::model::TempoSegment>, SscError> {
             tag: "BPMS".to_string(),
             reason: format!("entry {i} bpm is not a decimal: {bpm_s:?}"),
         })?;
+        // Zero would divide by zero in tempo synthesis; negative BPMs are
+        // StepMania's pre-#WARPS hack for skipping time and would make the
+        // SSQ tempo chunk run backwards. Neither has a DDR representation.
+        if bpm_r <= Rational::zero() {
+            return Err(SscError::InvalidValue {
+                tag: "BPMS".to_string(),
+                reason: format!("entry {i} bpm must be positive, got {bpm_s:?}"),
+            });
+        }
         out.push(TempoSegment {
             start_beat: Beat::from_rational(beat_r),
             bpm: Bpm::from_rational(bpm_r),
@@ -416,10 +474,20 @@ impl ChartDraft {
             "NOTES" | "NOTES2" => {
                 self.notes_body = Some(v.to_string());
             }
+            // SSC "split timing": a #NOTEDATA section may override the
+            // song-level timing. The model has one timing map per song,
+            // so a non-empty override here is dropped and this chart
+            // will be timed by the song-level tags instead.
+            "OFFSET" | "BPMS" | "STOPS" | "DELAYS" | "WARPS" if !v.trim().is_empty() => {
+                log::warn!(
+                    "per-chart #{tag} override is not supported and was dropped; \
+                     this chart will use the song-level timing: {:?}",
+                    v.trim()
+                );
+            }
             _ => {
                 // Other per-chart tags (METER, RADARVALUES, CHARTNAME,
-                // CREDIT, chart-local timing overrides, etc.) are
-                // ignored for now.
+                // CREDIT, empty timing tags, etc.) are ignored.
             }
         }
         Ok(())
@@ -471,9 +539,11 @@ mod tests {
         let song = parse(text).unwrap();
         assert_eq!(song.title.as_deref(), Some("Song Title"));
         assert_eq!(song.artist.as_deref(), Some("Someone"));
+        // `#OFFSET:-0.123` means beat 0 is 123 ms into the audio, which
+        // the model stores as a positive audio-sync offset.
         assert_eq!(
             song.audio_sync_offset_seconds,
-            Rational::new(-123, 1000).unwrap()
+            Rational::new(123, 1000).unwrap()
         );
         assert_eq!(song.preview.start_seconds, Rational::from_integer(30));
         assert_eq!(song.preview.length_seconds, Rational::from_integer(15));
@@ -505,6 +575,155 @@ mod tests {
             song.stops[0].duration_seconds,
             Rational::new(500, 1000).unwrap()
         );
+    }
+
+    // ---------- #OFFSET sign convention ----------
+
+    #[test]
+    fn positive_sm_offset_becomes_negative_model_offset() {
+        // `#OFFSET:0.5` = beat 0 is half a second *before* the audio
+        // starts, i.e. the audio-sync offset is -0.5 in DDR terms.
+        let song = parse("#OFFSET:0.5;").unwrap();
+        assert_eq!(
+            song.audio_sync_offset_seconds,
+            Rational::new(-1, 2).unwrap()
+        );
+    }
+
+    #[test]
+    fn zero_offset_is_sign_agnostic() {
+        let song = parse("#OFFSET:0.000;").unwrap();
+        assert_eq!(song.audio_sync_offset_seconds, Rational::zero());
+    }
+
+    #[test]
+    fn write_negates_model_offset_into_sm_offset() {
+        let mut song = empty_song();
+        // Beat 0 is 123 ms into the audio (DDR convention, positive).
+        song.audio_sync_offset_seconds = Rational::new(123, 1000).unwrap();
+        let written = write_string(&song);
+        assert!(
+            written.contains("#OFFSET:-0.123000;"),
+            "expected negated #OFFSET in:\n{written}"
+        );
+    }
+
+    #[test]
+    fn sm_offset_lands_in_tempo_data_0_with_ddr_sign() {
+        // End-to-end SM5→DDR: a simfile whose beat 0 is 123 ms into the
+        // audio must produce tempo_data[0] = +123 at TPS=1000. This is
+        // the regression test for the inverted-sign desync.
+        let text = "\
+#OFFSET:-0.123;
+#BPMS:0.000=120.000;
+";
+        let song = parse(text).unwrap();
+        let entries = crate::ssq::writer::synthesize_tempo_entries(&song).unwrap();
+        assert_eq!(entries[0], (0, 123), "tempo_data[0] must be +123 ms");
+    }
+
+    #[test]
+    fn sm_offset_shifts_every_tempo_anchor() {
+        // Beat 0 is 250 ms into the audio. 120 BPM = 500 ms/beat, so the
+        // BPM change at beat 4 lands at 250 + 4×500 = 2250 ms. 150 BPM =
+        // 400 ms/beat, so the stop at beat 8 arrives at 2250 + 4×400 =
+        // 3850 ms and departs 500 ms later at 4350 ms.
+        let text = "\
+#OFFSET:-0.250;
+#BPMS:0.000=120.000,4.000=150.000;
+#STOPS:8.000=0.500;
+";
+        let song = parse(text).unwrap();
+        let entries = crate::ssq::writer::synthesize_tempo_entries(&song).unwrap();
+        assert_eq!(
+            entries,
+            vec![(0, 250), (4096, 2250), (8192, 3850), (8192, 4350)]
+        );
+    }
+
+    #[test]
+    fn ddr_offset_round_trips_through_ssc_with_sign_preserved() {
+        // A DDR song with tempo_data[0] = +22 (beat 0 is 22 ms into the
+        // audio) must come back as +22 after SSC write → parse. If the
+        // writer and parser disagreed on sign this would flip to -22.
+        let mut song = empty_song();
+        song.audio_sync_offset_seconds = Rational::new(22, 1000).unwrap();
+        song.tempo_segments.push(crate::model::TempoSegment {
+            start_beat: crate::model::Beat::zero(),
+            bpm: Bpm::from_rational(Rational::from_integer(120)),
+        });
+        let written = write_string(&song);
+        assert!(written.contains("#OFFSET:-0.022000;"));
+        let re_parsed = parse(&written).unwrap();
+        assert_eq!(
+            re_parsed.audio_sync_offset_seconds,
+            Rational::new(22, 1000).unwrap()
+        );
+    }
+
+    // ---------- unsupported timing constructs ----------
+
+    #[test]
+    fn empty_delays_and_warps_are_accepted() {
+        // Every SM5-authored SSC carries these tags, usually empty.
+        let song = parse("#DELAYS:;\n#WARPS:;\n#BPMS:0.000=120.000;").unwrap();
+        assert_eq!(song.tempo_segments.len(), 1);
+    }
+
+    #[test]
+    fn non_empty_delays_and_warps_are_dropped_not_fatal() {
+        // Dropped with a warning (not asserted here — log capture is
+        // out of scope); the important contract is that the rest of the
+        // song still parses and the timing map ignores them.
+        let song =
+            parse("#DELAYS:4.000=1.000;\n#WARPS:8.000=2.000;\n#BPMS:0.000=120.000;").unwrap();
+        assert_eq!(song.tempo_segments.len(), 1);
+        assert!(song.stops.is_empty());
+    }
+
+    #[test]
+    fn negative_bpm_is_rejected() {
+        let err = parse("#BPMS:0.000=120.000,4.000=-120.000;").unwrap_err();
+        assert!(
+            matches!(err, SscError::InvalidValue { ref tag, .. } if tag == "BPMS"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn zero_bpm_is_rejected() {
+        let err = parse("#BPMS:0.000=0.000;").unwrap_err();
+        assert!(matches!(err, SscError::InvalidValue { ref tag, .. } if tag == "BPMS"));
+    }
+
+    #[test]
+    fn per_chart_timing_override_is_dropped_not_fatal() {
+        let text = "\
+#OFFSET:-0.100;
+#BPMS:0.000=120.000;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#OFFSET:-0.900;
+#BPMS:0.000=200.000;
+#NOTES:
+1000
+0000
+0000
+0000
+;
+";
+        let song = parse(text).unwrap();
+        // Song-level timing wins; the chart-level override is dropped.
+        assert_eq!(
+            song.audio_sync_offset_seconds,
+            Rational::new(100, 1000).unwrap()
+        );
+        assert_eq!(
+            song.tempo_segments[0].bpm,
+            Bpm::from_rational(Rational::from_integer(120))
+        );
+        assert_eq!(song.charts.len(), 1);
     }
 
     #[test]

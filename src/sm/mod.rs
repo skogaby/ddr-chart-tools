@@ -98,9 +98,11 @@ mod tests {
         let song = parse(text).unwrap();
         assert_eq!(song.title.as_deref(), Some("Test Song"));
         assert_eq!(song.artist.as_deref(), Some("Test Artist"));
+        // `#OFFSET:-0.050` = beat 0 is 50 ms into the audio; the model
+        // stores that as a positive audio-sync offset (DDR convention).
         assert_eq!(
             song.audio_sync_offset_seconds,
-            Rational::new(-50, 1000).unwrap()
+            Rational::new(50, 1000).unwrap()
         );
         assert_eq!(song.tempo_segments.len(), 1);
         assert_eq!(
