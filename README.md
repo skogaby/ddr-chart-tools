@@ -91,6 +91,44 @@ ddr-chart-tools \
 
 The archive formats are documented in `docs/ultramix_archive_formats.md`.
 
+### Sound-effect bank pairs (`ddr-se-bank`)
+
+A second binary, `ddr-se-bank`, builds the XACT wave-bank + sound-bank pair needed to add a **new
+sound effect** to DDR World, rather than to convert a song. The pair is registered at runtime by a
+hook DLL through `IXACT2Engine::CreateInMemoryWaveBank` + `CreateSoundBank` and played by cue name;
+no game asset is modified.
+
+```bash
+ddr-se-bank generate --input clap.ogg --name asti --out-dir ./banks
+# -> ./banks/asti.xwb  (in-memory wave bank, MS-ADPCM mono 44.1 kHz, one entry)
+# -> ./banks/asti.xsb  (sound bank, one cue named "asti", mix category 6)
+```
+
+`--name` is the wave bank's internal name, both of the sound bank's name fields, the entry's name
+**and** the cue's name. The engine matches banks by name and resolves cues with a byte-exact
+`strcmp`, so its case is significant. It must be 1–16 ASCII alphanumeric characters.
+
+The input **must already decode to mono 44100 Hz** (Ogg Vorbis). It is deliberately neither
+resampled nor downmixed: doing that silently would hide a mistake upstream, and doing it with an
+external tool would make the output depend on that tool's version. Convert deliberately, then feed
+the result in. Generation is otherwise **deterministic** — the same input and name produce
+byte-identical files on any machine, so the outputs can be committed and reproduced.
+
+`dump` prints a wave bank's metadata, including its segment table, so a build script can check a
+bank against the engine's container rules without reimplementing a parser. It works on the game's
+own banks too:
+
+```bash
+ddr-se-bank dump ./banks/asti.xwb
+ddr-se-bank dump /path/to/extracted/se_normal.xwb
+```
+
+**The dump format is a stable interface**: one `key=value` per line, fixed order, lowercase keys, so
+`ddr-se-bank dump bank.xwb | grep '^bank.alignment=' | cut -d= -f2` is safe to depend on. The full
+key list is documented in `src/xwb/dump.rs`. The field to check first is `bank.type`
+(`buffer` / `streaming`) — the bank-type bit is a hard gate in both directions, so a bank of the
+wrong type is rejected outright rather than merely misbehaving.
+
 ## Formats
 
 - **SSQ** — DDR's binary stepfile. Holds multiple charts (difficulties) for a single song plus tempo and event data.

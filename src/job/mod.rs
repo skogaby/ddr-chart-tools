@@ -4,6 +4,7 @@
 //! `(from, to)` pair, and writes output files colocated with inputs.
 
 pub mod batch;
+pub mod se_bank;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -388,16 +389,10 @@ fn build_xwb_bank(code: &str, fmt: &WaveFormat, main_data: &[u8], preview_data: 
     let spb = fmt.samples_per_block() as usize;
     let ba = fmt.block_align() as usize;
 
-    let main_duration = if ba > 0 {
-        (main_data.len() / ba) * spb
-    } else {
-        0
-    };
-    let preview_duration = if ba > 0 {
-        (preview_data.len() / ba) * spb
-    } else {
-        0
-    };
+    // `checked_div` guards a zero block-align (a degenerate WaveFormat), which
+    // yields a zero duration rather than dividing by zero.
+    let main_duration = main_data.len().checked_div(ba).unwrap_or(0) * spb;
+    let preview_duration = preview_data.len().checked_div(ba).unwrap_or(0) * spb;
 
     let mut bank_name = [0u8; 64];
     for (i, &b) in code.as_bytes().iter().enumerate().take(64) {

@@ -7,6 +7,7 @@
 
 pub mod adpcm;
 pub mod container;
+pub mod dump;
 
 pub use container::{WaveFormat, XwbBank, XwbEntry, XwbError};
 

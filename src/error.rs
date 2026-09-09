@@ -33,6 +33,9 @@ pub enum Error {
     #[error("ADPCM error: {0}")]
     Adpcm(#[from] crate::xwb::adpcm::AdpcmError),
 
+    #[error("SE bank error: {0}")]
+    SeBank(#[from] crate::job::se_bank::SeBankError),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

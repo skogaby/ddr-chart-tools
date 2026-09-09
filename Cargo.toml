@@ -5,10 +5,17 @@ edition = "2021"
 description = "Convert song and chart assets between DDR arcade and StepMania 5 formats"
 license = "MIT OR Apache-2.0"
 publish = false
+# Two binaries ship, so `cargo run` would otherwise be ambiguous.
+default-run = "ddr-chart-tools"
 
 [[bin]]
 name = "ddr-chart-tools"
 path = "src/main.rs"
+
+# Standalone helper for XACT sound-effect bank pairs (see src/bin/se_bank.rs).
+[[bin]]
+name = "ddr-se-bank"
+path = "src/bin/se_bank.rs"
 
 [lib]
 path = "src/lib.rs"
