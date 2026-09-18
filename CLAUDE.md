@@ -12,7 +12,7 @@ Pipeline shape: `CLI args → job planner → per-job converter → format parse
 
 Before making non-trivial decisions, read the relevant file under `.spec/`. Do not invent conventions that conflict with these.
 
-- `.spec/steering/product.md` — format matrix, domain glossary, **business rules** (numbered 1–10; violations are bugs), out-of-scope list.
+- `.spec/steering/product.md` — format matrix, domain glossary, **business rules** (numbered 1–12; violations are bugs), out-of-scope list.
 - `.spec/steering/tech.md` — tech stack, dependency rationale, architecture patterns, common technical gotchas (SSQ endianness, per-file TPS, legacy origin-shift, XWB ADPCM vs IMA, etc.).
 - `.spec/steering/structure.md` — module layout, where new code goes, naming conventions, things agents should *not* do.
 - `.spec/steering/rust-cli-standards.md` — authoritative Rust coding standards for this repo.
@@ -51,7 +51,7 @@ These are hard rules for this codebase. The full rationale is in `.spec/steering
 - **Logging goes through `log`**, not `println!`. `println!` is reserved for the CLI's primary output. Level discipline: `error!` = run failed, `warn!` = data dropped but continuing, `info!` = per-file outcomes, `debug!`/`trace!` = diagnostic detail.
 - **Never invent a new top-level module.** The categories in `.spec/steering/structure.md` cover every concern this tool has. Format-specific types live in their format module; only format-independent types go in `src/model/`.
 - **Never write a point-to-point converter.** Always `source → model → target`.
-- **Business rules are law.** The ten rules in `.spec/steering/product.md` (§ Business Rules) — e.g. "DDR_LEGACY is import-only", "modern SSQs use TPS=1000 with chunk types 1/2/3/20 only", "legacy timelines normalize to zero origin" — are correctness invariants, not stylistic preferences.
+- **Business rules are law.** The twelve rules in `.spec/steering/product.md` (§ Business Rules) — e.g. "DDR_LEGACY is import-only", "modern SSQs use TPS=1000 with chunk types 1/2/3/20 only", "legacy timelines normalize to zero origin" — are correctness invariants, not stylistic preferences.
 - **Tests.** Unit tests live beside the code; integration tests in `tests/` named `{from}_to_{to}.rs`. Round-trip tests (parse → write → parse) are the primary pattern for format work. No `unwrap()` in tests that represent real failure modes — use `?` with `fn ... -> Result<(), Box<dyn Error>>`. Golden-file tests are fine for SSC; avoid them for binary formats unless you're committed to reviewing every regeneration diff.
 - **Dependencies need justification.** Any new crate is introduced in a feature design doc with a reason. Avoid `*` versions; prefer shallow trees.
 - **Doc comments on public items.** `///` on every public item in library modules; `//!` at the top of each `mod.rs` saying what it owns and what it doesn't. If the signature changes, the doc changes in the same commit.

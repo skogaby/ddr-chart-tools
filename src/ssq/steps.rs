@@ -229,7 +229,14 @@ fn resolve_notes(
                         reason: format!("invalid freeze-end tick {tick}: {e}"),
                     }
                 })?;
-                resolve_freeze_end(&mut notes, entry.panels, end_beat, tick, chunk_offset)?;
+                resolve_freeze_end(
+                    &mut notes,
+                    style,
+                    entry.panels,
+                    end_beat,
+                    tick,
+                    chunk_offset,
+                )?;
             }
         }
     }
@@ -238,12 +245,24 @@ fn resolve_notes(
 }
 
 /// For each set bit in `panels_mask`, walk `notes` backward to find the
-/// most recent note hitting that panel. Promote that note to a
-/// [`HoldHead`] with the computed length. When a note's `kind` is
-/// already `HoldHead` (from an earlier bit in the same freeze-end), it
-/// is left alone — each bit closes at most one head.
+/// most recent note hitting that panel and close a hold on it ending at
+/// `end_beat`.
+///
+/// A step byte is one row; the game tracks freeze duration per panel
+/// *within* that row, so a freeze-end may name only some of a row's
+/// panels (`1002` in StepMania terms: tap Left, hold Right). When that
+/// happens the row is split — the named panels become their own
+/// [`HoldHead`] at the same beat and the rest stay a [`Tap`] — rather
+/// than promoting the whole row, which would turn simultaneous taps
+/// into freezes. Two holds on one row that close at different ticks
+/// resolve the same way, each freeze-end peeling off its own panels.
+///
+/// Shock heads are never promoted (§5.3) and a note that is already a
+/// `HoldHead` is left alone; either way the bit counts as resolved,
+/// since the spec says each panel bit matches at most one earlier note.
 fn resolve_freeze_end(
-    notes: &mut [Note],
+    notes: &mut Vec<Note>,
+    style: Style,
     panels_mask: u8,
     end_beat: Beat,
     end_tick: i32,
@@ -258,29 +277,41 @@ fn resolve_freeze_end(
         if overlap == 0 {
             continue;
         }
+        pending &= !overlap;
 
-        // This earlier note hits one or more panels we're looking for.
-        // Convert it to a HoldHead if it's still a Tap; shock heads are
-        // not promoted (shocks don't form freezes per §5.3).
-        let note_tick_beat = notes[idx].beat;
+        if !matches!(notes[idx].kind, NoteKind::Tap) {
+            continue;
+        }
+
         let length = end_beat
             .as_rational()
-            .sub(&note_tick_beat.as_rational())
+            .sub(&notes[idx].beat.as_rational())
             .map_err(|e| SsqError::MalformedChunk {
                 offset: chunk_offset,
                 reason: format!("freeze length math: {e}"),
             })?;
-        let length_beat = Beat::from_rational(length);
+        let kind = NoteKind::HoldHead {
+            length: Beat::from_rational(length),
+        };
 
-        if matches!(notes[idx].kind, NoteKind::Tap) {
-            notes[idx].kind = NoteKind::HoldHead {
-                length: length_beat,
-            };
+        if overlap == note_bits {
+            notes[idx].kind = kind;
+        } else {
+            // Only part of this row is held: split it. Inserting after
+            // `idx` keeps the notes beat-ordered and does not disturb
+            // the indices this walk has yet to visit.
+            let held = PanelSet::from_bits(style, overlap);
+            notes[idx].panels = notes[idx].panels.without(held);
+            let beat = notes[idx].beat;
+            notes.insert(
+                idx + 1,
+                Note {
+                    beat,
+                    kind,
+                    panels: held,
+                },
+            );
         }
-        // Mark these panels as resolved even if the note was already a
-        // HoldHead or Shock — the spec says each panel bit matches at
-        // most one earlier note.
-        pending &= !overlap;
     }
 
     if pending != 0 {
@@ -519,6 +550,70 @@ mod tests {
         let (h, body) = build_steps_chunk(0x0114, &[100, 500], &[0x01, 0x00], &[(0x08, 0x01)]);
         let err = parse_steps_chunk(&h, &body, 0).unwrap_err();
         assert!(matches!(err, SsqError::FreezeWithoutHead { .. }));
+    }
+
+    #[test]
+    fn freeze_end_on_part_of_a_row_splits_tap_from_hold() {
+        // Step 0x09 (Left + Right) at tick 100; only Right's freeze ends
+        // at tick 500. Left was a plain tap and must stay one — the old
+        // parser promoted the entire row, inventing a Left freeze.
+        let (h, body) = build_steps_chunk(0x0114, &[100, 500], &[0x09, 0x00], &[(0x08, 0x01)]);
+        let chart = parse_steps_chunk(&h, &body, 0).unwrap();
+        assert_eq!(chart.notes.len(), 2);
+        assert_eq!(chart.notes[0].beat, chart.notes[1].beat);
+        assert_eq!(chart.notes[0].kind, NoteKind::Tap);
+        assert_eq!(chart.notes[0].panels.bits(), 0x01);
+        assert_eq!(
+            chart.notes[1].kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::new(400, 1024).unwrap())
+            }
+        );
+        assert_eq!(chart.notes[1].panels.bits(), 0x08);
+    }
+
+    #[test]
+    fn two_freeze_ends_peel_separate_holds_off_one_row() {
+        // Step 0x03 at tick 100. Left's freeze ends at 300, Down's at
+        // 500. Each freeze-end must close only its own panel.
+        let (h, body) = build_steps_chunk(
+            0x0114,
+            &[100, 300, 500],
+            &[0x03, 0x00, 0x00],
+            &[(0x01, 0x01), (0x02, 0x01)],
+        );
+        let chart = parse_steps_chunk(&h, &body, 0).unwrap();
+        assert_eq!(chart.notes.len(), 2);
+        let by_panel = |bits: u8| {
+            chart
+                .notes
+                .iter()
+                .find(|n| n.panels.bits() == bits)
+                .unwrap_or_else(|| panic!("no note on panels {bits:#04x}"))
+        };
+        assert_eq!(
+            by_panel(0x01).kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::new(200, 1024).unwrap())
+            }
+        );
+        assert_eq!(
+            by_panel(0x02).kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::new(400, 1024).unwrap())
+            }
+        );
+    }
+
+    #[test]
+    fn freeze_end_covering_whole_row_promotes_in_place() {
+        // A genuine double freeze (0x03 closed by (0x03, 0x01)) stays a
+        // single two-panel HoldHead — no split.
+        let (h, body) = build_steps_chunk(0x0114, &[100, 500], &[0x03, 0x00], &[(0x03, 0x01)]);
+        let chart = parse_steps_chunk(&h, &body, 0).unwrap();
+        assert_eq!(chart.notes.len(), 1);
+        assert_eq!(chart.notes[0].panels.bits(), 0x03);
+        assert!(matches!(chart.notes[0].kind, NoteKind::HoldHead { .. }));
     }
 
     #[test]

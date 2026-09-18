@@ -50,4 +50,9 @@ pub struct Job {
     /// Milliseconds to add to the audio-sync offset. Applied on
     /// `DDR_LEGACY` inputs during modernization.
     pub sync_offset_ms: i32,
+    /// Explicit DDR song code (`--song-code`). When set it names the
+    /// output files and the XACT wave bank / cues; otherwise the code is
+    /// derived from the chart's basename. Only meaningful for `DDR`
+    /// output.
+    pub song_code: Option<String>,
 }

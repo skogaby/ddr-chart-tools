@@ -29,30 +29,38 @@ fn main() -> ExitCode {
         return ExitCode::from(EXIT_CLI_ERROR);
     }
 
-    let jobs = match cli.into_jobs() {
-        Ok(j) => j,
+    let plan = match cli.into_plan() {
+        Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(EXIT_CLI_ERROR);
         }
     };
 
-    if jobs.len() == 1 {
-        // Single-file mode: fail immediately on error.
-        match job::run_one(&jobs[0]) {
-            Ok(()) => ExitCode::from(EXIT_OK),
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(EXIT_FILE_ERROR)
+    match plan.pairing {
+        None => {
+            // Single-file mode: fail immediately on error.
+            match plan.jobs.first().map(job::run_one) {
+                Some(Ok(())) => ExitCode::from(EXIT_OK),
+                Some(Err(e)) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(EXIT_FILE_ERROR)
+                }
+                None => {
+                    eprintln!("error: nothing to convert");
+                    ExitCode::from(EXIT_CLI_ERROR)
+                }
             }
         }
-    } else {
-        // Batch mode: continue past per-file errors.
-        let summary = batch::run_batch(&jobs, None);
-        if summary.failed > 0 {
-            ExitCode::from(EXIT_FILE_ERROR)
-        } else {
-            ExitCode::from(EXIT_OK)
+        Some(pairing) => {
+            // Batch mode: continue past per-file errors and report what
+            // the directory scan could not pair.
+            let summary = batch::run_batch(&plan.jobs, Some(&pairing));
+            if summary.failed > 0 {
+                ExitCode::from(EXIT_FILE_ERROR)
+            } else {
+                ExitCode::from(EXIT_OK)
+            }
         }
     }
 }

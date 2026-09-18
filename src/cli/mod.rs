@@ -27,6 +27,17 @@ pub enum CliError {
     #[error("no eligible file pairs found in {dir}")]
     NoPairs { dir: PathBuf },
 
+    #[error("--song-code only applies to --to-format DDR (it names the XACT wave bank and cues)")]
+    SongCodeRequiresDdrOutput,
+
+    #[error(
+        "--song-code needs --chartfile; in batch mode name each input pair after its song code"
+    )]
+    SongCodeRequiresSingleFile,
+
+    #[error("--song-code must be 1-16 ASCII letters or digits, got {code:?}")]
+    BadSongCode { code: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -80,6 +91,16 @@ pub struct Cli {
     /// commonly need ~+53ms).
     #[arg(long, allow_hyphen_values = true)]
     pub sync_offset_ms: Option<i32>,
+
+    /// DDR song code for the converted song (e.g. `muka`): names the
+    /// output `.ssq`/`.xwb`/`.xsb` and the wave bank and cues inside
+    /// them. The game plays the cue whose name equals the song's code,
+    /// compared byte-for-byte, so this must match the ID the song is
+    /// installed under. 1–16 ASCII letters/digits. Single-file mode with
+    /// `--to-format DDR` only; in batch mode name each input pair after
+    /// its code instead.
+    #[arg(long)]
+    pub song_code: Option<String>,
 }
 
 impl Cli {
@@ -115,24 +136,47 @@ impl Cli {
             });
         }
 
+        if let Some(code) = &self.song_code {
+            if self.chartfile.is_none() {
+                return Err(CliError::SongCodeRequiresSingleFile);
+            }
+            if self.to_format != Format::Ddr {
+                return Err(CliError::SongCodeRequiresDdrOutput);
+            }
+            if !crate::xsb::is_valid_code(code) {
+                return Err(CliError::BadSongCode { code: code.clone() });
+            }
+        }
+
         Ok(())
     }
 
     /// Convert validated CLI args into a list of conversion jobs.
     pub fn into_jobs(self) -> Result<Vec<Job>, CliError> {
+        self.into_plan().map(|plan| plan.jobs)
+    }
+
+    /// Convert validated CLI args into a [`Plan`]: the jobs to run plus,
+    /// in batch mode, the pairing result so the runner can report files
+    /// that were skipped for lack of a partner.
+    pub fn into_plan(self) -> Result<Plan, CliError> {
         let sync_offset_ms = self.sync_offset_ms.unwrap_or(0);
 
         if let (Some(chart), Some(audio)) = (self.chartfile, self.audiofile) {
             let output_dir = self.output_dir.unwrap_or_else(|| PathBuf::from("output"));
-            return Ok(vec![Job {
-                from: self.from_format,
-                to: self.to_format,
-                chart_in: chart,
-                audio_in: audio,
-                overwrite: self.overwrite,
-                output_dir,
-                sync_offset_ms,
-            }]);
+            return Ok(Plan {
+                jobs: vec![Job {
+                    from: self.from_format,
+                    to: self.to_format,
+                    chart_in: chart,
+                    audio_in: audio,
+                    overwrite: self.overwrite,
+                    output_dir,
+                    sync_offset_ms,
+                    song_code: self.song_code,
+                }],
+                pairing: None,
+            });
         }
 
         // Batch mode.
@@ -155,20 +199,33 @@ impl Cli {
 
         let jobs = result
             .pairs
-            .into_iter()
+            .iter()
             .map(|(chart, audio)| Job {
                 from: self.from_format,
                 to: self.to_format,
-                chart_in: chart,
-                audio_in: audio,
+                chart_in: chart.clone(),
+                audio_in: audio.clone(),
                 overwrite: self.overwrite,
                 output_dir: output_dir.clone(),
                 sync_offset_ms,
+                song_code: None,
             })
             .collect();
 
-        Ok(jobs)
+        Ok(Plan {
+            jobs,
+            pairing: Some(result),
+        })
     }
+}
+
+/// What a run will do: the jobs, and in batch mode the directory
+/// pairing they came from (so unpaired files can be reported).
+#[derive(Debug)]
+pub struct Plan {
+    pub jobs: Vec<Job>,
+    /// `Some` in batch mode, `None` for a single `--chartfile` pair.
+    pub pairing: Option<pair::PairResult>,
 }
 
 #[cfg(test)]
@@ -342,5 +399,89 @@ mod tests {
         c.validate().unwrap();
         let jobs = c.into_jobs().unwrap();
         assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|j| j.song_code.is_none()));
+    }
+
+    #[test]
+    fn song_code_flows_into_single_file_job() {
+        let c = cli(&[
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "Mukade.ssc",
+            "--audiofile",
+            "Mukade.ogg",
+            "--song-code",
+            "muka",
+        ])
+        .unwrap();
+        c.validate().unwrap();
+        let jobs = c.into_jobs().unwrap();
+        assert_eq!(jobs[0].song_code.as_deref(), Some("muka"));
+    }
+
+    #[test]
+    fn song_code_rejected_for_sm5_output() {
+        let c = cli(&[
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--chartfile",
+            "x.ssq",
+            "--audiofile",
+            "x.xwb",
+            "--song-code",
+            "muka",
+        ])
+        .unwrap();
+        assert!(matches!(
+            c.validate(),
+            Err(CliError::SongCodeRequiresDdrOutput)
+        ));
+    }
+
+    #[test]
+    fn song_code_must_be_a_valid_cue_name() {
+        for bad in ["", "mu ka", "muka!", "abcdefghijklmnopq"] {
+            let c = cli(&[
+                "--from-format",
+                "SM5",
+                "--to-format",
+                "DDR",
+                "--chartfile",
+                "x.ssc",
+                "--audiofile",
+                "x.ogg",
+                "--song-code",
+                bad,
+            ])
+            .unwrap();
+            assert!(
+                matches!(c.validate(), Err(CliError::BadSongCode { .. })),
+                "expected BadSongCode for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn song_code_requires_single_file_mode() {
+        let c = cli(&[
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--input-folder",
+            "/tmp/songs",
+            "--song-code",
+            "muka",
+        ])
+        .unwrap();
+        assert!(matches!(
+            c.validate(),
+            Err(CliError::SongCodeRequiresSingleFile)
+        ));
     }
 }

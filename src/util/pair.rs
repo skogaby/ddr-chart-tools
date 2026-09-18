@@ -29,7 +29,8 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
     let chart_exts = format.chart_extensions();
     let audio_exts = format.audio_extensions();
 
-    let mut charts: HashMap<String, PathBuf> = HashMap::new();
+    // stem → (preference rank of its extension, path)
+    let mut charts: HashMap<String, (usize, PathBuf)> = HashMap::new();
     let mut audio: HashMap<String, Vec<PathBuf>> = HashMap::new();
 
     for entry in std::fs::read_dir(dir)? {
@@ -53,7 +54,7 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
             None => continue,
         };
 
-        if chart_exts.iter().any(|&ce| ce == ext) {
+        if let Some(rank) = chart_exts.iter().position(|&ce| ce == ext) {
             // Ultramix chart filenames use `{id}_all.ssq` while their
             // audio siblings are `{id}.wavm`. Strip the `_all` suffix
             // from chart stems before pairing so they match.
@@ -64,7 +65,16 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
             } else {
                 stem
             };
-            charts.entry(stem).or_insert(path);
+            // Several chart files can share a stem (StepMania packs
+            // commonly ship both `song.ssc` and `song.sm`). Prefer the
+            // extension listed first for the format so the choice does
+            // not depend on directory iteration order.
+            match charts.get(&stem) {
+                Some(&(existing_rank, _)) if existing_rank <= rank => {}
+                _ => {
+                    charts.insert(stem, (rank, path));
+                }
+            }
         } else if audio_exts.iter().any(|&ae| ae == ext) {
             audio.entry(stem).or_default().push(path);
         }
@@ -78,7 +88,7 @@ pub fn find_pairs(dir: &Path, format: Format) -> std::io::Result<PairResult> {
     };
 
     // Match charts to audio.
-    for (stem, chart_path) in &charts {
+    for (stem, (_, chart_path)) in &charts {
         match audio.remove(stem) {
             Some(audio_paths) if audio_paths.len() == 1 => {
                 result
@@ -162,6 +172,21 @@ mod tests {
         let dir = setup_dir(&["a.ssc", "a.ogg", "b.sm", "b.ogg"]);
         let result = find_pairs(dir.path(), Format::Sm5).unwrap();
         assert_eq!(result.pairs.len(), 2);
+    }
+
+    #[test]
+    fn sm5_prefers_ssc_when_sm_shares_the_stem() {
+        // Both are the same chart in two formats; which one wins must not
+        // depend on the filesystem's directory order (it did — Windows
+        // and macOS picked different files for the same pack).
+        let dir = setup_dir(&["song.sm", "song.ssc", "song.ogg"]);
+        let result = find_pairs(dir.path(), Format::Sm5).unwrap();
+        assert_eq!(result.pairs.len(), 1);
+        assert_eq!(
+            result.pairs[0].0.extension().and_then(|e| e.to_str()),
+            Some("ssc")
+        );
+        assert!(result.unpaired_charts.is_empty());
     }
 
     #[test]

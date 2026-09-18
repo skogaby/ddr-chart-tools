@@ -82,8 +82,8 @@ fn ddr_to_sm5(job: &Job) -> Result<(), Error> {
     let audio = xwb::parse_audio(&audio_bytes)?;
     result.song.audio = audio;
 
-    let ssc_path = output_path(&job.chart_in, "ssc", &job.output_dir);
-    let ogg_path = output_path(&job.chart_in, "ogg", &job.output_dir);
+    let ssc_path = output_path(job, "ssc");
+    let ogg_path = output_path(job, "ogg");
     check_overwrite(&ssc_path, job.overwrite)?;
     check_overwrite(&ogg_path, job.overwrite)?;
 
@@ -119,20 +119,25 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     song.audio = audio;
     song.tps = 1000;
 
-    let ssq_path = output_path(&job.chart_in, "ssq", &job.output_dir);
-    let xwb_path = output_path(&job.chart_in, "xwb", &job.output_dir);
-    let xsb_path = output_path(&job.chart_in, "xsb", &job.output_dir);
+    let code = resolve_song_code(job);
+    let ssq_path = output_path(job, "ssq");
+    let xwb_path = output_path(job, "xwb");
+    let xsb_path = output_path(job, "xsb");
     check_overwrite(&ssq_path, job.overwrite)?;
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
 
-    // SSQ — synthesize tempo pairs from the Song's semantic view first,
-    // then pass them through `synthesize_events` which ensures FINISH
-    // is bracketed by TIMING entries (see its doc comment). Without
-    // this, the writer's default tempo synthesis puts the trailing
-    // entry at the last-note beat, which leaves FINISH past the last
-    // consumed TIMING and locks the game at READY.
-    let initial_tempo_pairs = ssq::writer::synthesize_tempo_entries(&song)?;
+    // SSQ — synthesize tempo pairs from the Song's semantic view, with
+    // the trailing pair placed exactly where `synthesize_events` will
+    // put END. Two things depend on that trailing pair: it is what makes
+    // the final `#BPMS` entry's tempo derivable at all (SSQ encodes BPM
+    // as the slope between consecutive pairs), and it brackets FINISH
+    // between two TIMING entries — without which the game locks at
+    // READY (see `synthesize_events`).
+    let end_tick = chart_end_tick(&song);
+    let end_beat = crate::model::Beat::from_measure_ticks(i64::from(end_tick))
+        .map_err(|e| ssq::SsqError::Write(format!("end beat: {e}")))?;
+    let initial_tempo_pairs = ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))?;
     let (events, tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs);
     let mut ssq_out = Vec::new();
     ssq::writer::write(&song, &events, &tempo_pairs, &mut ssq_out)?;
@@ -140,7 +145,6 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     info!("wrote {}", ssq_path.display());
 
     // XWB + XSB.
-    let code = song_code(&job.chart_in);
     write_ddr_audio(&song.audio, &song.preview, &code, &xwb_path, &xsb_path)?;
 
     Ok(())
@@ -165,9 +169,9 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     ssq_legacy::modernize::modernize(&mut result);
     apply_sync_offset(&mut result, job.sync_offset_ms);
 
-    let ssq_path = output_path(&job.chart_in, "ssq", &job.output_dir);
-    let xwb_path = output_path(&job.chart_in, "xwb", &job.output_dir);
-    let xsb_path = output_path(&job.chart_in, "xsb", &job.output_dir);
+    let ssq_path = output_path(job, "ssq");
+    let xwb_path = output_path(job, "xwb");
+    let xsb_path = output_path(job, "xsb");
     check_overwrite(&ssq_path, job.overwrite)?;
     check_overwrite(&xwb_path, job.overwrite)?;
     check_overwrite(&xsb_path, job.overwrite)?;
@@ -191,7 +195,7 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     } else {
         let audio = decode_legacy_audio(&audio_bytes)?;
         result.song.audio = audio;
-        let code = song_code(&job.chart_in);
+        let code = resolve_song_code(job);
         write_ddr_audio(
             &result.song.audio,
             &result.song.preview,
@@ -227,8 +231,8 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     let audio = decode_legacy_audio(&audio_bytes)?;
     result.song.audio = audio;
 
-    let ssc_path = output_path(&job.chart_in, "ssc", &job.output_dir);
-    let ogg_path = output_path(&job.chart_in, "ogg", &job.output_dir);
+    let ssc_path = output_path(job, "ssc");
+    let ogg_path = output_path(job, "ogg");
     check_overwrite(&ssc_path, job.overwrite)?;
     check_overwrite(&ogg_path, job.overwrite)?;
 
@@ -270,17 +274,33 @@ fn apply_sync_offset(result: &mut crate::ssq::SsqParseResult, offset_ms: i32) {
 // Helpers
 // -----------------------------------------------------------------------
 
-/// Derive output path: input's basename with new extension, placed in
-/// the job's output directory. For Ultramix inputs, strips the `_all`
-/// suffix (e.g. `abs2_all.ssq` → `abs2.ssc`) so output filenames match
-/// the canonical per-song ID the game uses to find assets.
-fn output_path(input: &Path, ext: &str, output_dir: &Path) -> PathBuf {
-    let stem = input
+/// Derive output path: the job's output basename with the given
+/// extension, placed in the job's output directory. See [`output_stem`].
+fn output_path(job: &Job, ext: &str) -> PathBuf {
+    // Not `Path::with_extension`: a stem like `$1.78` would lose its
+    // `.78` as though it were an extension.
+    job.output_dir.join(format!("{}.{ext}", output_stem(job)))
+}
+
+/// Basename shared by every file a job writes: the explicit `--song-code`
+/// when given, else the input chart's stem. For Ultramix inputs the
+/// `_all` suffix is stripped (`abs2_all.ssq` → `abs2.ssc`) so output
+/// filenames match the canonical per-song ID the game uses to find
+/// assets.
+fn output_stem(job: &Job) -> String {
+    match &job.song_code {
+        Some(code) => code.clone(),
+        None => input_stem(&job.chart_in).to_string(),
+    }
+}
+
+/// The input chart's file stem with any Ultramix `_all` suffix removed.
+fn input_stem(chart_path: &Path) -> &str {
+    let stem = chart_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.strip_suffix("_all").unwrap_or(s))
         .unwrap_or("");
-    output_dir.join(Path::new(stem).with_extension(ext))
+    stem.strip_suffix("_all").unwrap_or(stem)
 }
 
 /// Fail if `path` exists and overwrite is not enabled.
@@ -333,26 +353,47 @@ fn apply_ultramix_sif_if_present(chart_path: &Path, song: &mut crate::model::Son
     info!("applied metadata from {}", sif_path.display());
 }
 
-/// Derive a 4-char song code from the input chart's basename.
-/// For Ultramix inputs, strips the `_all` suffix first so the code is
-/// the canonical 4-char per-song ID (e.g. `abs2_all` → `abs2`).
-fn song_code(chart_path: &Path) -> String {
-    let stem = chart_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.strip_suffix("_all").unwrap_or(s))
-        .unwrap_or("song");
-    let alnum: String = stem
+/// Resolve the DDR song code for a job: the name of the XACT wave bank
+/// and of its two cues (`{code}` main, `{code}_s` preview).
+///
+/// DDR World plays a song by asking XACT for the cue named after the
+/// song's ID, compared byte-for-byte (case included). The bank therefore
+/// only produces sound when this code equals the ID the files are
+/// installed under — which is also their basename. So the code *is* the
+/// output basename: `--song-code` when given, else the input stem.
+///
+/// When the stem cannot be a code (spaces, punctuation, more than 16
+/// characters) the bank is still written, with a best-effort code, so
+/// the chart can be inspected — but the audio will be silent in-game
+/// and the user is told what to rename.
+fn resolve_song_code(job: &Job) -> String {
+    let stem = output_stem(job);
+    if xsb::is_valid_code(&stem) {
+        return stem;
+    }
+    let fallback: String = stem
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(4)
+        .filter(char::is_ascii_alphanumeric)
+        .take(SONG_CODE_FALLBACK_LEN)
         .collect();
-    if alnum.is_empty() {
+    let code = if fallback.is_empty() {
         "song".to_string()
     } else {
-        alnum
-    }
+        fallback
+    };
+    warn!(
+        "{}: basename {stem:?} cannot name a DDR wave bank (need 1-16 ASCII letters/digits); \
+         audio was written under code {code:?} and the game will NOT play it unless the song \
+         is installed as {code}.ssq/.xwb/.xsb. Name the input pair after the song's ID, or \
+         pass --song-code <ID> in single-file mode.",
+        job.chart_in.display(),
+    );
+    code
 }
+
+/// Length of the best-effort code derived from a basename that is not a
+/// valid code in its own right. Stock DDR IDs are 4–5 characters.
+const SONG_CODE_FALLBACK_LEN: usize = 4;
 
 /// Detect and decode legacy audio (XWB or WAVM) by header inspection.
 fn decode_legacy_audio(bytes: &[u8]) -> Result<AudioBuffer, Error> {
@@ -407,7 +448,7 @@ fn write_ddr_audio(
     validate_ddr_audio(audio)?;
     let fmt = ddr_wave_format(audio.sample_rate);
     info!(
-        "encoding {} Hz {}ch PCM to MS-ADPCM (bank declares {} Hz)",
+        "encoding {} Hz {}ch PCM to MS-ADPCM (bank declares {} Hz); wave bank and cues named {code:?}",
         audio.sample_rate,
         audio.channels,
         fmt.sample_rate()
@@ -545,34 +586,12 @@ fn try_audio_passthrough(
     Ok(true)
 }
 
-/// Synthesize the canonical 6-event sequence (spec §4.4) and return it
-/// alongside a tempo-pair list guaranteed to bracket FINISH.
-///
-/// The game (1) assigns a `musicCount` to each non-TIMING note by
-/// linearly interpolating between the surrounding TIMING notes and
-/// (2) uses `musicCount` to drive a per-frame beatCount lookup via
-/// `lower_bound` over the notes list. If FINISH sits past the last
-/// TIMING note in walk-order, it never gets a `musicCount` assigned
-/// (stays at `INT32_MIN`), which both (a) causes the results-screen
-/// guard to fire instantly on STEP_FINISHED and (b) leaves an
-/// out-of-order `musicCount` in the notes list — which breaks
-/// `lower_bound` and makes per-frame beatCount computation return
-/// garbage. That garbage manifests as the game locking at READY
-/// without ever transitioning to GO / gameplay.
-///
-/// To guarantee FINISH is bracketed by TIMING notes: the last tempo
-/// pair must sit at or past END's tick. Hand-authored reference
-/// charts place the trailing tempo pair at END's tick exactly. If the
-/// source's trailing tempo pair is already past FINISH+1 measure, we
-/// adopt its tick as END; otherwise we extrapolate a new trailing
-/// pair at `last_note + 2 measures` using the last segment's BPM.
-fn synthesize_events(
-    song: &crate::model::Song,
-    raw_tempo_pairs: &[(i32, i32)],
-) -> (Vec<SsqEvent>, Vec<(i32, i32)>) {
+/// Measure-tick where END belongs: two whole measures past the measure
+/// containing the last note (a hold counts to its tail). Songs with no
+/// notes at all are treated as ending one measure in.
+fn chart_end_tick(song: &crate::model::Song) -> i32 {
     use crate::model::NoteKind;
 
-    // Find the last note tick across all charts.
     let last_tick: i32 = song
         .charts
         .iter()
@@ -593,7 +612,38 @@ fn synthesize_events(
         .unwrap_or(4096);
 
     let last_measure = ((last_tick + 4095) / 4096) * 4096;
-    let desired_end = last_measure + 8192; // last note + 2 measures
+    last_measure + 8192 // last note + 2 measures
+}
+
+/// Synthesize the canonical 6-event sequence (spec §4.4) and return it
+/// alongside a tempo-pair list guaranteed to bracket FINISH.
+///
+/// The game (1) assigns a `musicCount` to each non-TIMING note by
+/// linearly interpolating between the surrounding TIMING notes and
+/// (2) uses `musicCount` to drive a per-frame beatCount lookup via
+/// `lower_bound` over the notes list. If FINISH sits past the last
+/// TIMING note in walk-order, it never gets a `musicCount` assigned
+/// (stays at `INT32_MIN`), which both (a) causes the results-screen
+/// guard to fire instantly on STEP_FINISHED and (b) leaves an
+/// out-of-order `musicCount` in the notes list — which breaks
+/// `lower_bound` and makes per-frame beatCount computation return
+/// garbage. That garbage manifests as the game locking at READY
+/// without ever transitioning to GO / gameplay.
+///
+/// To guarantee FINISH is bracketed by TIMING notes: the last tempo
+/// pair must sit at or past END's tick. Hand-authored reference
+/// charts place the trailing tempo pair at END's tick exactly. If the
+/// source's trailing tempo pair is already at or past
+/// [`chart_end_tick`], we adopt its tick as END; otherwise we
+/// extrapolate a new trailing pair there using the last segment's
+/// slope. The SM5→DDR path pre-places its trailing pair at
+/// `chart_end_tick` with exact tempo math, so extrapolation is only
+/// ever exercised for legacy sources.
+fn synthesize_events(
+    song: &crate::model::Song,
+    raw_tempo_pairs: &[(i32, i32)],
+) -> (Vec<SsqEvent>, Vec<(i32, i32)>) {
+    let desired_end = chart_end_tick(song);
 
     // Build the tempo-pair list that goes into the SSQ. Invariant:
     // the final pair's time_offset == end_tick, so END coincides with
@@ -735,6 +785,65 @@ mod tests {
             audio_sync_offset_seconds: Rational::zero(),
             preview: PreviewSlice::default_window(),
         }
+    }
+
+    // ---------- song code / output naming ----------
+
+    fn job_for(chart: &str, song_code: Option<&str>) -> Job {
+        Job {
+            from: Format::Sm5,
+            to: Format::Ddr,
+            chart_in: PathBuf::from(chart),
+            audio_in: PathBuf::from("x.ogg"),
+            overwrite: false,
+            output_dir: PathBuf::from("out"),
+            sync_offset_ms: 0,
+            song_code: song_code.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn song_code_is_the_whole_basename_when_it_can_be() {
+        // The game plays the cue named after the installed basename, so
+        // the two must be identical — including case and length. The old
+        // 4-character truncation silently broke every 5-character ID.
+        assert_eq!(resolve_song_code(&job_for("muka.ssc", None)), "muka");
+        assert_eq!(resolve_song_code(&job_for("bknh2.ssq", None)), "bknh2");
+        assert_eq!(resolve_song_code(&job_for("Muka.ssc", None)), "Muka");
+        assert_eq!(resolve_song_code(&job_for("abs2_all.ssq", None)), "abs2");
+    }
+
+    #[test]
+    fn explicit_song_code_names_bank_and_output_files() {
+        let job = job_for("Mukade.ssc", Some("muka"));
+        assert_eq!(resolve_song_code(&job), "muka");
+        assert_eq!(output_path(&job, "xwb"), PathBuf::from("out/muka.xwb"));
+        assert_eq!(output_path(&job, "ssq"), PathBuf::from("out/muka.ssq"));
+    }
+
+    #[test]
+    fn unusable_basename_falls_back_to_a_short_code() {
+        // Still produces *something* (so the SSQ can be inspected) but
+        // the caller logs that it will not play under this filename.
+        assert_eq!(
+            resolve_song_code(&job_for("A Is For Action.ssc", None)),
+            "AIsF"
+        );
+        assert_eq!(resolve_song_code(&job_for("$1.78.ssc", None)), "178");
+        assert_eq!(resolve_song_code(&job_for("!!!.ssc", None)), "song");
+        assert_eq!(
+            output_path(&job_for("A Is For Action.ssc", None), "ssq"),
+            PathBuf::from("out/A Is For Action.ssq"),
+            "output filename still follows the input when no code is given"
+        );
+    }
+
+    #[test]
+    fn output_stem_keeps_dots_that_are_not_the_extension() {
+        assert_eq!(
+            output_path(&job_for("$1.78.ssc", None), "ssq"),
+            PathBuf::from("out/$1.78.ssq")
+        );
     }
 
     // ---------- validate_ddr_audio ----------
@@ -1092,6 +1201,45 @@ mod tests {
         assert_eq!(events.len(), 6);
         let (finish, end) = finish_and_end_ticks(&events);
         assert!(end > finish);
+    }
+
+    #[test]
+    fn sm5_to_ddr_flow_places_trailing_pair_at_end_with_final_bpm() {
+        // The SM5→DDR job pre-computes END's tick and asks the writer to
+        // place the trailing tempo pair there with exact tempo math, so
+        // `synthesize_events` adopts the pairs unchanged and the slope
+        // into END is the *final* `#BPMS` entry — not an extrapolation
+        // of whichever segment happened to precede the last pair (the
+        // Mukade / "media offline" bug: 1280 or 348 BPM to the end).
+        use crate::model::{Bpm, Stop, TempoSegment};
+        let seg = |beat: i64, bpm: i64| TempoSegment {
+            start_beat: Beat::from_rational(Rational::from_integer(beat)),
+            bpm: Bpm::from_rational(Rational::from_integer(bpm)),
+        };
+        let mut song = song_with_last_note_at(324 * 1024);
+        song.tempo_segments = vec![seg(0, 160), seg(180, 1280), seg(196, 160)];
+        song.stops = vec![Stop {
+            at_beat: Beat::from_rational(Rational::from_integer(180)),
+            duration_seconds: Rational::new(9, 4).unwrap(),
+        }];
+
+        let end_tick = chart_end_tick(&song);
+        assert_eq!(end_tick, 324 * 1024 + 8192);
+        let end_beat = Beat::from_measure_ticks(i64::from(end_tick)).unwrap();
+        let initial = crate::ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))
+            .expect("tempo synthesis");
+        let (events, pairs) = synthesize_events(&song, &initial);
+        let (_, end) = finish_and_end_ticks(&events);
+
+        assert_eq!(pairs, initial, "no extrapolated pair should be appended");
+        assert_eq!(pairs.last().unwrap().0, end);
+        let n = pairs.len();
+        let (a, b) = (pairs[n - 2], pairs[n - 1]);
+        let bpm = 240.0 * 1000.0 * f64::from(b.0 - a.0) / (4096.0 * f64::from(b.1 - a.1));
+        assert!(
+            (bpm - 160.0).abs() < 1e-9,
+            "final slope must be 160 BPM, got {bpm}"
+        );
     }
 
     #[test]

@@ -1032,6 +1032,100 @@ MMMM
     }
 
     #[test]
+    fn sm5_to_ddr_tap_beside_hold_does_not_become_a_freeze() {
+        // Regression for the "hallucinated freeze arrows" report: a row
+        // mixing a tap and a hold head (`1002`) must come out of the SSQ
+        // as a Left tap and a Right freeze, not a two-panel freeze.
+        let text = "\
+#BPMS:0.000=120.000;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#NOTES:
+1002
+0000
+0003
+0000
+;
+";
+        let parsed = ssc_to_ssq_to_ssq_parse(text);
+        let notes = &parsed.song.charts[0].notes;
+        assert_eq!(notes.len(), 2, "got {notes:?}");
+        assert_eq!(notes[0].kind, NoteKind::Tap);
+        assert_eq!(notes[0].panels.bits(), 0x01);
+        assert_eq!(
+            notes[1].kind,
+            NoteKind::HoldHead {
+                length: crate::model::Beat::from_rational(Rational::from_integer(2))
+            }
+        );
+        assert_eq!(notes[1].panels.bits(), 0x08);
+    }
+
+    #[test]
+    fn sm5_to_ddr_holds_with_different_tails_keep_their_own_lengths() {
+        let text = "\
+#BPMS:0.000=120.000;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#NOTES:
+2200
+3000
+0000
+0300
+;
+";
+        let parsed = ssc_to_ssq_to_ssq_parse(text);
+        let notes = &parsed.song.charts[0].notes;
+        assert_eq!(notes.len(), 2, "got {notes:?}");
+        let length_of = |bits: u8| match notes.iter().find(|n| n.panels.bits() == bits) {
+            Some(crate::model::Note {
+                kind: NoteKind::HoldHead { length },
+                ..
+            }) => length.as_rational(),
+            other => panic!("expected a HoldHead on {bits:#04x}, got {other:?}"),
+        };
+        assert_eq!(length_of(0x01), Rational::from_integer(1));
+        assert_eq!(length_of(0x02), Rational::from_integer(3));
+    }
+
+    #[test]
+    fn sm5_to_ddr_final_bpm_change_is_encoded() {
+        // Regression for "the last BPM change gets ignored": with the
+        // chart continuing past the final `#BPMS` entry, the SSQ's last
+        // tempo pair must give that entry's tempo as its slope.
+        let text = "\
+#BPMS:0.000=160.000,180.000=1280.000,196.000=160.000;
+#STOPS:180.000=2.250;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#NOTES:
+1000
+0000
+0000
+0000
+";
+        let mut text = text.to_string();
+        // Pad out to a note at beat 324 (measure 81).
+        for _ in 0..80 {
+            text.push_str(",\n0000\n0000\n0000\n0000\n");
+        }
+        text.push_str(",\n1000\n0000\n0000\n0000\n;\n");
+        let parsed = ssc_to_ssq_to_ssq_parse(&text);
+        let segs = &parsed.song.tempo_segments;
+        let last = segs.last().unwrap();
+        assert_eq!(last.start_beat.as_rational(), Rational::from_integer(196));
+        assert_eq!(
+            last.bpm.as_rational(),
+            Rational::from_integer(160),
+            "tempo after the final #BPMS entry must be 160, got {segs:?}"
+        );
+        assert_eq!(parsed.song.stops.len(), 1, "no spurious zero-length stop");
+    }
+
+    #[test]
     fn sm5_to_ddr_per_difficulty_mines_produces_two_mine_chunks() {
         // Two charts with different per-panel mines. After SM5 → DDR
         // both should have their mines preserved, each in a distinct

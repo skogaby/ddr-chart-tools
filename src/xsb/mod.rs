@@ -556,6 +556,15 @@ const CRC_TABLE: [u16; 256] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Whether `code` can name a wave bank and its cues: 1 to
+/// [`MAX_CODE_LEN`] ASCII alphanumeric bytes. This is the same check
+/// [`write`] and [`write_se`] apply, exposed so callers can validate (or
+/// derive) a code before any file is produced.
+#[must_use]
+pub fn is_valid_code(code: &str) -> bool {
+    validate_code(code).is_ok()
+}
+
 fn validate_code(code: &str) -> Result<&[u8], XsbError> {
     let bytes = code.as_bytes();
     if bytes.is_empty()

@@ -58,14 +58,17 @@ fn difficulty_name(d: Difficulty) -> &'static str {
 /// - `1` tap
 /// - `2` hold head (paired with a later `3` at the same panel)
 /// - `3` hold/roll tail
-/// - `4` roll head — **rejected**, not supported
-/// - `M` mine — accepted only as a **full-row shock** pattern (every
-///   panel on the style, or every P1 panel / every P2 panel on Double).
-///   Partial mine patterns are rejected because DDR's shock arrow has
-///   no per-panel mine equivalent, and silently dropping them would
-///   lie to the user about what their chart does.
+/// - `4` roll head — treated as a hold head (DDR has no rolls)
+/// - `M` mine — a **full-row** pattern (every panel on the style, or
+///   every P1 panel / every P2 panel on Double) becomes a DDR shock
+///   arrow; any other pattern becomes a per-panel `Mine` note.
 /// - `F` fake — dropped silently
 /// - `L` lift — dropped silently
+///
+/// Taps and hold heads on the same row become separate notes (one
+/// `Tap` for the taps, one `HoldHead` per distinct tail beat), so a
+/// hold never drags a simultaneous tap into a freeze. See
+/// `merge_coincident_notes`.
 pub fn parse_notes_body(body: &str, style: Style) -> Result<Vec<Note>, SscError> {
     let panel_count = style.panel_count() as usize;
     let mut notes: Vec<Note> = Vec::new();
@@ -116,7 +119,7 @@ pub fn parse_notes_body(body: &str, style: Style) -> Result<Vec<Note>, SscError>
         }
     }
 
-    Ok(notes)
+    Ok(merge_coincident_notes(notes))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -171,13 +174,16 @@ fn decode_row(
         });
     }
 
-    // Collect all tap/hold-head panels on this row into a single Note
-    // (matches SSQ's "one row hits multiple panels → one Note with a
-    // multi-bit panel mask"). `3` tails and `F`/`L` don't emit notes.
-    // `M` characters are skipped — already consumed above into a Mine
-    // or Shock note.
+    // Collect the row's plain taps into one Note and give each hold head
+    // its own provisional Note. A row can mix the two (`1002` = tap Left,
+    // hold Right), and two heads on one row can close at different beats
+    // (`2200` … `3000` … `0300`), so a hold's panels must not share a
+    // Note with anything whose duration differs. Heads that do close
+    // together are merged afterwards by `merge_coincident_notes`.
+    // `3` tails and `F`/`L` don't emit notes. `M` characters are skipped
+    // — already consumed above into a Mine or Shock note.
     let mut tap_bits: u8 = 0;
-    let mut hold_heads_this_row: Vec<usize> = Vec::new();
+    let mut hold_head_panels: Vec<usize> = Vec::new();
 
     for (panel, ch) in row.chars().enumerate() {
         match ch {
@@ -188,8 +194,7 @@ fn decode_row(
             '2' | '4' => {
                 // `2` = hold head, `4` = roll head. DDR has no rolls;
                 // treat both as holds. Tail (`3`) closes either.
-                tap_bits |= 1u8 << panel;
-                hold_heads_this_row.push(panel);
+                hold_head_panels.push(panel);
             }
             '3' => {
                 let Some(head_idx) = open_holds[panel].take() else {
@@ -229,18 +234,46 @@ fn decode_row(
     }
 
     if tap_bits != 0 {
-        let note_idx = notes.len();
         notes.push(Note {
             beat,
             kind: NoteKind::Tap,
             panels: PanelSet::from_bits(style, tap_bits),
         });
-        for p in &hold_heads_this_row {
-            open_holds[*p] = Some(note_idx);
-        }
+    }
+    for panel in hold_head_panels {
+        // Provisional `Tap`; the matching `3` promotes it to `HoldHead`.
+        open_holds[panel] = Some(notes.len());
+        notes.push(Note {
+            beat,
+            kind: NoteKind::Tap,
+            panels: PanelSet::from_bits(style, 1u8 << panel),
+        });
     }
 
     Ok(())
+}
+
+/// Merge adjacent notes that share a beat and a kind into one
+/// multi-panel note.
+///
+/// `decode_row` emits one provisional note per hold head so that heads
+/// with different tails never share a note. Heads that close together
+/// (`2200` … `3300`) end up as two identical single-panel `HoldHead`s
+/// at the same beat; this folds them back into the one two-panel note
+/// the SSQ side produces for the same chart, so DDR→SM5→DDR stays
+/// byte-identical. Notes of differing kind or hold length at the same
+/// beat are left separate — that distinction is the whole point.
+fn merge_coincident_notes(notes: Vec<Note>) -> Vec<Note> {
+    let mut merged: Vec<Note> = Vec::with_capacity(notes.len());
+    for note in notes {
+        match merged.last_mut() {
+            Some(prev) if prev.beat == note.beat && prev.kind == note.kind => {
+                prev.panels = PanelSet::from_bits_union(prev.panels, note.panels);
+            }
+            _ => merged.push(note),
+        }
+    }
+    merged
 }
 
 /// Classification of a single `#NOTES` row's `M` characters.
@@ -621,6 +654,79 @@ mod tests {
         let notes = parse_notes_body(body, Style::Single).unwrap();
         assert_eq!(notes.len(), 1);
         assert!(matches!(notes[0].kind, NoteKind::HoldHead { .. }));
+    }
+
+    #[test]
+    fn tap_beside_hold_head_stays_a_tap() {
+        // Regression: `1002` used to become one note whose *whole* panel
+        // set was promoted when the Right tail arrived, so Left — a plain
+        // tap — turned into a freeze arrow in the SSQ.
+        let body = "1002\n0000\n0000\n0003\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 2, "tap and hold must be separate notes");
+        assert_eq!(notes[0].beat, notes[1].beat);
+        assert_eq!(notes[0].kind, NoteKind::Tap);
+        assert_eq!(notes[0].panels.bits(), 0x01);
+        assert_eq!(
+            notes[1].kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::from_integer(3))
+            }
+        );
+        assert_eq!(notes[1].panels.bits(), 0x08);
+    }
+
+    #[test]
+    fn two_hold_heads_with_different_tails_are_separate_notes() {
+        // Left closes after one beat, Down after three. Previously the
+        // second tail overwrote the length of the shared note, so both
+        // holds were written with whichever tail came last.
+        let body = "2200\n3000\n0000\n0300\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].panels.bits(), 0x01);
+        assert_eq!(
+            notes[0].kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::from_integer(1))
+            }
+        );
+        assert_eq!(notes[1].panels.bits(), 0x02);
+        assert_eq!(
+            notes[1].kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::from_integer(3))
+            }
+        );
+    }
+
+    #[test]
+    fn two_hold_heads_closing_together_merge_into_one_note() {
+        // A genuine double freeze is still one two-panel note, matching
+        // what the SSQ parser produces for the same chart.
+        let body = "2200\n0000\n0000\n3300\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].panels.bits(), 0x03);
+        assert_eq!(
+            notes[0].kind,
+            NoteKind::HoldHead {
+                length: Beat::from_rational(Rational::from_integer(3))
+            }
+        );
+    }
+
+    #[test]
+    fn taps_on_a_row_still_merge_into_one_note_beside_holds() {
+        // `1102`: two taps + one hold head → one Tap note (0x03) and one
+        // HoldHead (0x08); the taps are not split from each other.
+        let body = "1102\n0000\n0000\n0003\n";
+        let notes = parse_notes_body(body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].kind, NoteKind::Tap);
+        assert_eq!(notes[0].panels.bits(), 0x03);
+        assert!(matches!(notes[1].kind, NoteKind::HoldHead { .. }));
+        assert_eq!(notes[1].panels.bits(), 0x08);
     }
 
     #[test]

@@ -139,6 +139,18 @@ impl PanelSet {
     pub fn count(self) -> u32 {
         self.0.count_ones()
     }
+
+    /// Panels active in either set.
+    #[must_use]
+    pub const fn from_bits_union(a: Self, b: Self) -> Self {
+        Self(a.0 | b.0)
+    }
+
+    /// Panels active in `self` but not in `other`.
+    #[must_use]
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
 }
 
 /// Which side(s) a shock arrow affects.

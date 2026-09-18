@@ -42,7 +42,9 @@ ddr-chart-tools \
     --input-folder path/to/ddr-songs/
 ```
 
-Every eligible chart+audio pair in the folder is converted. Files are paired by shared basename (`song.ssq` ↔ `song.xwb`). For `DDR_LEGACY` inputs, the `_all` suffix used by Ultramix is stripped during pairing so `abs2_all.ssq` matches `abs2.wavm`. Unpaired files are skipped with a warning. Subdirectories are not scanned.
+Every eligible chart+audio pair in the folder is converted. Files are paired by shared basename (`song.ssq` ↔ `song.xwb`). For `DDR_LEGACY` inputs, the `_all` suffix used by Ultramix is stripped during pairing so `abs2_all.ssq` matches `abs2.wavm`. When a StepMania song ships both `song.ssc` and `song.sm`, the `.ssc` is used. Unpaired files are skipped with a warning. Subdirectories are not scanned.
+
+For `--to-format DDR`, **name each pair after the song's DDR code** (`muka.ssc` + `muka.ogg`) — see "Song codes" below.
 
 Batch output defaults to `<input-folder>/output/`. Use `--output-dir` to override.
 
@@ -58,6 +60,7 @@ Batch output defaults to `<input-folder>/output/`. Use `--output-dir` to overrid
 | `--output-dir` | Directory to write output into (defaults: `./output` single, `<input>/output` batch) |
 | `--overwrite` | Silently replace existing output files |
 | `--sync-offset-ms N` | Add N milliseconds to the audio-sync offset (see "Sync Offset" below) |
+| `--song-code CODE` | DDR song code for a single-file `--to-format DDR` conversion; names the output files and the audio bank (see "Song codes" below) |
 | `-v` / `-vv` | Increase log verbosity (debug / trace) |
 | `-q` / `--quiet` | Suppress info-level output (keeps warn and error) |
 | `--version` | Print version |
@@ -78,6 +81,17 @@ Legacy-only chunks are dropped and logged. The output SSQs use the modern author
 Converted legacy charts are often played by a different audio engine than the one that produced them. That engine's pipeline latency shows up as a consistent sync bias — in practice, **Ultramix → DDR World** output drifts ~53 ms and benefits from `--sync-offset-ms 53`. Use 0 (or omit the flag) when you want the raw, unadjusted sync; tune per-target if your platform needs a different constant.
 
 A positive value delays the chart relative to the audio (beat 0 lands N ms later in the song). In SSQ terms it adds N to `tempo_data[0]`; in SSC terms it subtracts N/1000 from `#OFFSET` — the two formats describe the same quantity with opposite signs, and the tool handles that conversion for you.
+
+### Song codes (DDR output)
+
+DDR World finds a song's assets by its **song code** — a short ID such as `muka` — and loads `{code}.ssq`, `{code}.xwb` and `{code}.xsb`. It then plays the audio by asking the XACT engine for the cue *named* `{code}` inside the sound bank (and `{code}_s` for the preview). That lookup is a byte-for-byte string compare, case included. If the name baked into the bank does not equal the filename the song is installed under, the chart loads but **plays silently**.
+
+The tool therefore uses one name for both: the output basename **is** the code written into the wave bank and the cues.
+
+- **Batch mode**: the input basename is the code. Name each pair `{code}.ssc` (or `.sm`) + `{code}.ogg` before converting, e.g. `muka.ssc` + `muka.ogg` → `muka.ssq/.xwb/.xsb` with cue `muka`.
+- **Single-file mode**: pass `--song-code muka`. The outputs are then named `muka.*` regardless of the input filename, ready to install.
+
+Codes must be 1–16 ASCII letters or digits. If an input basename cannot be a code (spaces, punctuation, too long — e.g. `A Is For Action.ssc`), the files are still written under that basename so the chart can be inspected, but the bank gets a best-effort short code and a warning explains that the audio will not play until the song is renamed. Renaming the *outputs* after the fact does **not** fix this: the code is inside the `.xwb` and `.xsb`, so re-run the conversion with the right name.
 
 ### SM5 → DDR audio requirements
 
