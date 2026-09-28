@@ -59,7 +59,9 @@ Batch output defaults to `<input-folder>/output/`. Use `--output-dir` to overrid
 | `--input-folder` | Directory of file pairs to convert in batch |
 | `--output-dir` | Directory to write output into (defaults: `./output` single, `<input>/output` batch) |
 | `--overwrite` | Silently replace existing output files |
-| `--sync-offset-ms N` | Add N milliseconds to the audio-sync offset (see "Sync Offset" below) |
+| `--sync-offset-ms N` | Move the whole chart N milliseconds later relative to the audio, on any conversion (see "Sync Offset" below) |
+| `--auto-sync [MODE]` | Measure how far the chart is from its audio and correct it (`apply`, the default), or only log the correction (`report`) — see "Auto-sync" below |
+| `--auto-sync-max-ms N` | Largest correction `--auto-sync` may apply, in ms (default 60, max 200) |
 | `--song-code CODE` | DDR song code for a single-file `--to-format DDR` conversion; names the output files and the audio bank (see "Song codes" below) |
 | `-v` / `-vv` | Increase log verbosity (debug / trace) |
 | `-q` / `--quiet` | Suppress info-level output (keeps warn and error) |
@@ -71,16 +73,37 @@ Batch output defaults to `<input-folder>/output/`. Use `--output-dir` to overrid
 ddr-chart-tools \
     --from-format DDR_LEGACY --to-format DDR \
     --input-folder path/to/legacy-songs/ \
-    --sync-offset-ms 53
+    --auto-sync
 ```
 
 Legacy-only chunks are dropped and logged. The output SSQs use the modern authoring conventions (TPS=1000, chunk types 1/2/3 plus — when the input carries them — 20 for mines). The `time_offset[0]` origin-shift used by older charts (e.g. Ultramix) is normalized so the chart timeline begins at beat 0.
 
 ### Sync Offset
 
-Converted legacy charts are often played by a different audio engine than the one that produced them. That engine's pipeline latency shows up as a consistent sync bias — in practice, **Ultramix → DDR World** output drifts ~53 ms and benefits from `--sync-offset-ms 53`. Use 0 (or omit the flag) when you want the raw, unadjusted sync; tune per-target if your platform needs a different constant.
+Converted charts are often played by a different audio engine than the one that produced them. That engine's pipeline latency shows up as a consistent sync bias, which `--sync-offset-ms N` corrects on any conversion. Use 0 (or omit the flag) when you want the raw, unadjusted sync; tune per-target if your platform needs a constant.
 
-A positive value delays the chart relative to the audio (beat 0 lands N ms later in the song). In SSQ terms it adds N to `tempo_data[0]`; in SSC terms it subtracts N/1000 from `#OFFSET` — the two formats describe the same quantity with opposite signs, and the tool handles that conversion for you.
+A positive value moves the whole chart later relative to the audio (every note lands N ms later in the song); a negative value moves it earlier. In SSQ terms it adds N to every `tempo_data` anchor, so BPMs and stops are unchanged; in SSC terms it subtracts N/1000 from `#OFFSET`. The two formats describe the same quantity with opposite signs, and the tool handles that conversion for you.
+
+**Ultramix → DDR World:** earlier versions recommended `--sync-offset-ms 53`. That figure was tuned when the flag only moved the first tempo anchor, which applied the full correction at the start of a song and progressively less toward the end. Measuring a Dancing Stage Unleashed rip (Ultramix engine, 44 songs) against DDR World's sync with `--auto-sync report` found no common bias: the songs it could measure needed anywhere from −57 to +54 ms (median +2 ms). Use `--auto-sync` for these charts instead of a constant; see "Auto-sync" below.
+
+### Auto-sync
+
+Some charts are simply a few milliseconds off their audio — including a good share of stock DDR World songs, and more so charts from older games. `--auto-sync` measures that error and corrects the chart during conversion, so you no longer need a round trip through a chart editor to nudge the offset by ear.
+
+```bash
+# See what it would do to a whole folder first:
+ddr-chart-tools --from-format SM5 --to-format DDR --input-folder pack/ --auto-sync report
+# Then convert with the corrections applied:
+ddr-chart-tools --from-format SM5 --to-format DDR --input-folder pack/ --auto-sync
+```
+
+How it works: the tool computes an onset-strength envelope of the audio (a short-window "rising edge" detector) and correlates it with every note of every difficulty, using the chart's own BPMs and stops. The best alignment is the measured offset; the chart is moved so that offset matches the one well-synced DDR World charts produce. Only the chart moves — every tempo anchor in SSQ output, `#OFFSET` in SSC output. The audio is never modified. Against a community-maintained, play-validated per-song offset list for stock DDR World songs, it agrees within 1 ms for about 94% of songs and within 2 ms for about 98%.
+
+- **Cap.** Corrections are at most `--auto-sync-max-ms` (default 60 ms). Much larger errors cannot be measured reliably: most DDR music has strong off-beat hits, so a chart that is half a beat off (150–200 ms at common tempos) looks as in sync as a correct one.
+- **Refusals.** When a measurement is not trustworthy, the sync is left as it was and a warning says why: no usable audio, too few notes, the best match at the edge of the search, two alignments fitting about equally well, the song's two halves disagreeing by more than 5 ms (tempo drift or a cut), or a correction beyond the cap. The conversion still succeeds.
+- **Log lines.** Each song gets one line ending in stable `key=value` fields (`auto_sync=apply|unchanged|report|refused`, `delta_ms=`, `reason=`, `correction_ms=`, …) so a batch can be grepped.
+- **With `--sync-offset-ms`.** Auto-sync runs first; the bias is then added on top as a per-platform engine correction.
+- **Legacy inputs.** Works on `DDR_LEGACY` too, including Ultramix-era charts with WAVM audio. When a compliant XWB is passed through byte-for-byte, it is decoded only for the measurement; the bank itself is still copied unchanged. Expect more refusals than on modern charts: on a Dancing Stage Unleashed rip, 16 of 44 songs were measured confidently, and most of the rest were refused because the chart's tempo drifts against the audio over the song, which a single offset cannot fix. Run `--auto-sync report` first to see which songs are affected.
 
 ### Song codes (DDR output)
 
@@ -106,7 +129,7 @@ python3 scripts/extract_ultramix_xdata.py ultramix_us /path/to/extracted/iso ./e
 ddr-chart-tools \
     --from-format DDR_LEGACY --to-format DDR \
     --input-folder ./extracted \
-    --sync-offset-ms 53
+    --auto-sync
 ```
 
 The archive formats are documented in `docs/ultramix_archive_formats.md`.

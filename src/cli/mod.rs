@@ -8,7 +8,7 @@ use clap::Parser;
 use thiserror::Error;
 
 use crate::util::pair;
-use job::{Format, Job};
+use job::{AutoSync, AutoSyncMode, Format, Job};
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -37,6 +37,15 @@ pub enum CliError {
 
     #[error("--song-code must be 1-16 ASCII letters or digits, got {code:?}")]
     BadSongCode { code: String },
+
+    #[error("--auto-sync-max-ms only applies together with --auto-sync")]
+    AutoSyncMaxRequiresAutoSync,
+
+    #[error(
+        "--auto-sync-max-ms must be 1-{} ms, got {ms}",
+        crate::sync::MAX_CORRECTION_LIMIT_MS
+    )]
+    AutoSyncMaxOutOfRange { ms: u32 },
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -83,12 +92,11 @@ pub struct Cli {
     #[arg(short, long, default_value_t = false)]
     pub quiet: bool,
 
-    /// Add this many milliseconds to the audio-sync offset. Positive
-    /// values delay the chart relative to the audio: beat 0 lands N ms
-    /// later in the audio (adds N to `tempo_data[0]` in SSQ, subtracts
-    /// N/1000 from `#OFFSET` in SSC). Use to correct for consistent
-    /// per-platform sync bias (e.g. Ultramix charts on DDR World
-    /// commonly need ~+53ms).
+    /// Move the whole chart this many milliseconds later relative to
+    /// the audio (negative = earlier), on any conversion. Every tempo
+    /// anchor moves by N ms in SSQ output; `#OFFSET` decreases by
+    /// N/1000 s in SSC output. BPMs and stops are unchanged. Use to
+    /// correct a consistent per-platform sync bias.
     #[arg(long, allow_hyphen_values = true)]
     pub sync_offset_ms: Option<i32>,
 
@@ -101,6 +109,27 @@ pub struct Cli {
     /// its code instead.
     #[arg(long)]
     pub song_code: Option<String>,
+
+    /// Measure how far the chart is from its audio and move the chart to
+    /// match (`apply`, the default when the flag is given alone), or only
+    /// log the correction it would make (`report`). Corrections are
+    /// bounded by --auto-sync-max-ms; untrustworthy measurements leave
+    /// the sync unchanged with a warning. Applied before
+    /// --sync-offset-ms.
+    #[arg(
+        long,
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "apply",
+        value_name = "MODE"
+    )]
+    pub auto_sync: Option<AutoSyncMode>,
+
+    /// Largest correction --auto-sync may apply, in milliseconds
+    /// (default 60, maximum 200). Wider caps let half-beat misalignments
+    /// into the search.
+    #[arg(long, value_name = "MS")]
+    pub auto_sync_max_ms: Option<u32>,
 }
 
 impl Cli {
@@ -136,6 +165,15 @@ impl Cli {
             });
         }
 
+        if let Some(ms) = self.auto_sync_max_ms {
+            if self.auto_sync.is_none() {
+                return Err(CliError::AutoSyncMaxRequiresAutoSync);
+            }
+            if ms == 0 || ms > crate::sync::MAX_CORRECTION_LIMIT_MS {
+                return Err(CliError::AutoSyncMaxOutOfRange { ms });
+            }
+        }
+
         if let Some(code) = &self.song_code {
             if self.chartfile.is_none() {
                 return Err(CliError::SongCodeRequiresSingleFile);
@@ -161,6 +199,12 @@ impl Cli {
     /// that were skipped for lack of a partner.
     pub fn into_plan(self) -> Result<Plan, CliError> {
         let sync_offset_ms = self.sync_offset_ms.unwrap_or(0);
+        let auto_sync = self.auto_sync.map(|mode| AutoSync {
+            mode,
+            max_correction_ms: self
+                .auto_sync_max_ms
+                .unwrap_or(crate::sync::DEFAULT_MAX_CORRECTION_MS),
+        });
 
         if let (Some(chart), Some(audio)) = (self.chartfile, self.audiofile) {
             let output_dir = self.output_dir.unwrap_or_else(|| PathBuf::from("output"));
@@ -174,6 +218,7 @@ impl Cli {
                     output_dir,
                     sync_offset_ms,
                     song_code: self.song_code,
+                    auto_sync,
                 }],
                 pairing: None,
             });
@@ -209,6 +254,7 @@ impl Cli {
                 output_dir: output_dir.clone(),
                 sync_offset_ms,
                 song_code: None,
+                auto_sync,
             })
             .collect();
 
@@ -231,6 +277,7 @@ pub struct Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use job::{AutoSync, AutoSyncMode};
 
     fn cli(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("ddr-chart-tools").chain(args.iter().copied()))
@@ -464,6 +511,149 @@ mod tests {
                 "expected BadSongCode for {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn sync_offset_reaches_sm5_and_ddr_jobs() {
+        // Both directions used to ignore the bias; lock down that it is
+        // threaded into their jobs now that it is honored.
+        for (from, to, chart, audio) in [
+            ("SM5", "DDR", "song.ssc", "song.ogg"),
+            ("DDR", "SM5", "song.ssq", "song.xwb"),
+        ] {
+            for bias in ["12", "-12"] {
+                let c = cli(&[
+                    "--from-format",
+                    from,
+                    "--to-format",
+                    to,
+                    "--chartfile",
+                    chart,
+                    "--audiofile",
+                    audio,
+                    "--sync-offset-ms",
+                    bias,
+                ])
+                .unwrap();
+                c.validate().unwrap();
+                let jobs = c.into_jobs().unwrap();
+                assert_eq!(
+                    jobs[0].sync_offset_ms.to_string(),
+                    bias,
+                    "{from} -> {to} with --sync-offset-ms {bias}"
+                );
+            }
+        }
+    }
+
+    fn auto_sync_cli(extra: &[&str]) -> Result<Cli, clap::Error> {
+        let mut args = vec![
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "song.ssc",
+            "--audiofile",
+            "song.ogg",
+        ];
+        args.extend_from_slice(extra);
+        cli(&args)
+    }
+
+    #[test]
+    fn auto_sync_absent_by_default() {
+        let c = auto_sync_cli(&[]).unwrap();
+        c.validate().unwrap();
+        assert!(c.into_jobs().unwrap()[0].auto_sync.is_none());
+    }
+
+    #[test]
+    fn auto_sync_bare_flag_applies_with_default_cap() {
+        let c = auto_sync_cli(&["--auto-sync"]).unwrap();
+        c.validate().unwrap();
+        let jobs = c.into_jobs().unwrap();
+        assert_eq!(
+            jobs[0].auto_sync,
+            Some(AutoSync {
+                mode: AutoSyncMode::Apply,
+                max_correction_ms: crate::sync::DEFAULT_MAX_CORRECTION_MS,
+            })
+        );
+    }
+
+    #[test]
+    fn auto_sync_bare_flag_before_another_flag() {
+        let c = cli(&[
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--auto-sync",
+            "--chartfile",
+            "song.ssc",
+            "--audiofile",
+            "song.ogg",
+        ])
+        .unwrap();
+        assert_eq!(c.auto_sync, Some(AutoSyncMode::Apply));
+    }
+
+    #[test]
+    fn auto_sync_report_mode() {
+        let c = auto_sync_cli(&["--auto-sync", "report"]).unwrap();
+        c.validate().unwrap();
+        let jobs = c.into_jobs().unwrap();
+        assert_eq!(
+            jobs[0].auto_sync.map(|a| a.mode),
+            Some(AutoSyncMode::Report)
+        );
+    }
+
+    #[test]
+    fn auto_sync_max_ms_sets_cap() {
+        let c = auto_sync_cli(&["--auto-sync", "--auto-sync-max-ms", "90"]).unwrap();
+        c.validate().unwrap();
+        let jobs = c.into_jobs().unwrap();
+        assert_eq!(jobs[0].auto_sync.map(|a| a.max_correction_ms), Some(90));
+    }
+
+    #[test]
+    fn auto_sync_max_requires_auto_sync() {
+        let c = auto_sync_cli(&["--auto-sync-max-ms", "90"]).unwrap();
+        assert!(matches!(
+            c.validate(),
+            Err(CliError::AutoSyncMaxRequiresAutoSync)
+        ));
+    }
+
+    #[test]
+    fn auto_sync_max_out_of_range() {
+        for ms in ["0", "201"] {
+            let c = auto_sync_cli(&["--auto-sync", "--auto-sync-max-ms", ms]).unwrap();
+            assert!(
+                matches!(c.validate(), Err(CliError::AutoSyncMaxOutOfRange { .. })),
+                "{ms} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_sync_accepts_legacy_input() {
+        let c = cli(&[
+            "--from-format",
+            "DDR_LEGACY",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "x_all.ssq",
+            "--audiofile",
+            "x.wavm",
+            "--auto-sync",
+        ])
+        .unwrap();
+        c.validate().unwrap();
+        assert!(c.into_jobs().unwrap()[0].auto_sync.is_some());
     }
 
     #[test]

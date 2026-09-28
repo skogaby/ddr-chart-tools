@@ -18,10 +18,11 @@
 | `env_logger` | 0.11 | Log subscriber (verbosity from `-v` flags) |
 | `lewton` | 0.10 | OGG Vorbis decode (pure Rust) |
 | `vorbis_rs` | 0.5 | OGG Vorbis encode (static libvorbis via `cc`) |
+| `rustfft` | 6 | FFT for the auto-sync onset envelope (`sync/`). Pure Rust, runtime-selected SIMD, no C code; adds 7 small pure-Rust crates |
 
 Dev-only: `tempfile = "3"` for filesystem tests.
 
-All audio codecs (MS-ADPCM, XBOX-IMA, OGG Vorbis) are in-process. No external CLI tools at runtime.
+All audio codecs (MS-ADPCM, XBOX-IMA, OGG Vorbis) and the auto-sync signal analysis are in-process. No external CLI tools at runtime.
 
 ## Cross-Compilation
 
@@ -84,6 +85,11 @@ This tool has no external integrations. Everything is local file I/O. No network
 - **One SSQ step byte can mix taps and freezes**: the freeze block names *which* of a row's panels are held, so `1002` (tap Left, hold Right) is one step byte with a one-bit freeze entry. The model expresses this as two `Note`s at the same beat; the SSQ writer ORs same-tick rows and freeze-ends, the SSQ parser splits a row when a freeze-end covers only some of its panels, and the SSC parser never lets a hold head share a `Note` with a tap. Promoting a whole row on one freeze bit is the "hallucinated freeze arrows" bug.
 - **The song code is the cue name is the filename**: XACT resolves cues by byte-exact `strcmp` against the song ID the game loaded the files by. Case matters; a 4-character truncation broke 5-character IDs. See business rule 11.
 - **DDR World's chart clock is wall-clock, not sample-derived** (RE of `gamemdx_20260825.dll` `GamePlayActor::onUpdate` @ `18005cc70`): `musicCount = avsTickMs − musicStartTickMs + smallOffsets`. It never reads the audio position or the wave's sample rate, and `xactengine2_10.dll` (`FUN_0041d54e`) reads the rate from each entry's format field and resamples into a fixed 44.1 kHz DirectSound mix. So a 48 kHz bank stays in sync; the only cost is the engine's runtime SRC quality. Don't re-introduce a resampler on the assumption the game needs 44.1 kHz.
+
+- **DDR World rounds every tempo anchor to whole milliseconds** (RE of `step::SsqReader`'s prepare routine, identical in the `gamemdx` 2025-08-05, 2026-08-25 and 2026-09-15 builds): `anchor_ms = floor(f32(int32(tempo_data × 1000)) / f32(tps) + 0.5f)`, and each TIMING note's `musicCount` (int32 ms) comes from these anchors. TPS 1000 anchors are therefore played exactly as written; for TPS 150/75 sources exact `tempo_data / tps` timing is up to ~0.5 ms per anchor away from what the game plays.
+- **Auto-sync's ±60 ms cap exists because of half-beat aliasing**: DDR's catalogue is mostly 150–200 BPM with strong off-beat onsets and eighth-note-dense charts, so a chart off by half a beat (150–200 ms) looks as in sync as a correct one to any onset method. With a ±200 ms search 2.5% of stock songs locked onto the half-beat alias. Inside ±60 ms no such alias fits below ~214 BPM.
+- **`sync::TARGET_OFFSET_MS` is specific to the onset detector**: it absorbs the detector's latency relative to a perceived attack. Any change to window, hop, band, emphasis, lag or attribution in `sync/` invalidates it — re-run `tests/auto_sync_calibration.rs` (see its header) and update the constant.
+- **The community offset CSV's sign**: its value `c` is the amount to *add to `#OFFSET`* (equivalently, subtract from every `tempo_data`), because the modpack's generator negates the community tool's "move the chart this much later" value. An in-sync chart measures `T − c`, so `T = median(measured + c)`. Getting this backwards fits 15× worse and is easy to detect.
 
 ## Build, Test, Run
 

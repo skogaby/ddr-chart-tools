@@ -5,6 +5,7 @@
 
 pub mod batch;
 pub mod se_bank;
+mod sync_offset;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use crate::ssc;
 use crate::ssq;
 use crate::ssq::events::SsqEvent;
 use crate::ssq_legacy;
+use crate::sync::TimeMap;
 use crate::wavm;
 use crate::xsb;
 use crate::xwb;
@@ -55,6 +57,9 @@ pub enum JobError {
          (remix the source before converting — this tool will not do it silently)"
     )]
     WrongChannelCount { channels: u16 },
+
+    #[error("moving the chart by {delta_ms} ms overflows its timing values")]
+    SyncShiftOverflow { delta_ms: i32 },
 }
 
 /// Execute one conversion job.
@@ -81,6 +86,18 @@ fn ddr_to_sm5(job: &Job) -> Result<(), Error> {
     let mut result = ssq::parse(&chart_bytes)?;
     let audio = xwb::parse_audio(&audio_bytes)?;
     result.song.audio = audio;
+    if let Some(cfg) = job.auto_sync {
+        let map = TimeMap::from_song(&result.song);
+        let delta = sync_offset::auto_sync_delta(
+            job,
+            cfg,
+            &result.song.audio,
+            &result.song.charts,
+            map.as_ref(),
+        );
+        sync_offset::shift_timeline(&mut result.song, &mut [], delta)?;
+    }
+    sync_offset::shift_timeline(&mut result.song, &mut [], job.sync_offset_ms)?;
 
     let ssc_path = output_path(job, "ssc");
     let ogg_path = output_path(job, "ogg");
@@ -138,7 +155,15 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     let end_beat = crate::model::Beat::from_measure_ticks(i64::from(end_tick))
         .map_err(|e| ssq::SsqError::Write(format!("end beat: {e}")))?;
     let initial_tempo_pairs = ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))?;
-    let (events, tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs);
+    let (events, mut tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs);
+    if let Some(cfg) = job.auto_sync {
+        // Measured against the pairs the SSQ will carry, so the chart is
+        // judged by exactly what the game will play.
+        let map = TimeMap::from_tempo_pairs(&tempo_pairs, song.tps);
+        let delta = sync_offset::auto_sync_delta(job, cfg, &song.audio, &song.charts, map.as_ref());
+        sync_offset::shift_timeline(&mut song, &mut tempo_pairs, delta)?;
+    }
+    sync_offset::shift_timeline(&mut song, &mut tempo_pairs, job.sync_offset_ms)?;
     let mut ssq_out = Vec::new();
     ssq::writer::write(&song, &events, &tempo_pairs, &mut ssq_out)?;
     fs::write(&ssq_path, &ssq_out)?;
@@ -167,7 +192,6 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     }
 
     ssq_legacy::modernize::modernize(&mut result);
-    apply_sync_offset(&mut result, job.sync_offset_ms);
 
     let ssq_path = output_path(job, "ssq");
     let xwb_path = output_path(job, "xwb");
@@ -182,8 +206,35 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     // start 0xFA), which DDR World rejects. Synthesizing from scratch
     // matches the SM5→DDR path and produces the spec's canonical shape.
     // `synthesize_events` also extends `raw_tempo_pairs` as needed to
-    // keep FINISH bracketed by TIMING notes (see its doc comment).
-    let (events, tempo_pairs) = synthesize_events(&result.song, &result.raw_tempo_pairs);
+    // keep FINISH bracketed by TIMING notes (see its doc comment). The
+    // bias is applied to the final pairs, so any extrapolated trailing
+    // pair moves with the rest of the chart.
+    let (events, mut tempo_pairs) = synthesize_events(&result.song, &result.raw_tempo_pairs);
+    // Auto-sync needs decoded audio even when the XWB will be byte-copied
+    // below; the decode is kept for re-encoding when it is not. Failing
+    // to decode *for analysis* only skips auto-sync.
+    let mut decoded_audio = None;
+    if let Some(cfg) = job.auto_sync {
+        match decode_legacy_audio(&audio_bytes) {
+            Ok(audio) => {
+                let map = TimeMap::from_tempo_pairs(&tempo_pairs, result.song.tps);
+                let delta = sync_offset::auto_sync_delta(
+                    job,
+                    cfg,
+                    &audio,
+                    &result.song.charts,
+                    map.as_ref(),
+                );
+                sync_offset::shift_timeline(&mut result.song, &mut tempo_pairs, delta)?;
+                decoded_audio = Some(audio);
+            }
+            Err(e) => warn!(
+                "{}: auto-sync skipped: cannot decode audio for analysis: {e}",
+                job.chart_in.display()
+            ),
+        }
+    }
+    sync_offset::shift_timeline(&mut result.song, &mut tempo_pairs, job.sync_offset_ms)?;
     let mut ssq_out = Vec::new();
     ssq::writer::write(&result.song, &events, &tempo_pairs, &mut ssq_out)?;
     fs::write(&ssq_path, &ssq_out)?;
@@ -193,7 +244,10 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     if try_audio_passthrough(&audio_bytes, &job.audio_in, &xwb_path, &xsb_path)? {
         info!("audio passthrough (XWB+XSB byte-copied)");
     } else {
-        let audio = decode_legacy_audio(&audio_bytes)?;
+        let audio = match decoded_audio {
+            Some(audio) => audio,
+            None => decode_legacy_audio(&audio_bytes)?,
+        };
         result.song.audio = audio;
         let code = resolve_song_code(job);
         write_ddr_audio(
@@ -224,12 +278,27 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     }
 
     ssq_legacy::modernize::modernize(&mut result);
-    apply_sync_offset(&mut result, job.sync_offset_ms);
 
     apply_ultramix_sif_if_present(&job.chart_in, &mut result.song);
 
     let audio = decode_legacy_audio(&audio_bytes)?;
     result.song.audio = audio;
+    if let Some(cfg) = job.auto_sync {
+        let map = TimeMap::from_song(&result.song);
+        let delta = sync_offset::auto_sync_delta(
+            job,
+            cfg,
+            &result.song.audio,
+            &result.song.charts,
+            map.as_ref(),
+        );
+        sync_offset::shift_timeline(&mut result.song, &mut result.raw_tempo_pairs, delta)?;
+    }
+    sync_offset::shift_timeline(
+        &mut result.song,
+        &mut result.raw_tempo_pairs,
+        job.sync_offset_ms,
+    )?;
 
     let ssc_path = output_path(job, "ssc");
     let ogg_path = output_path(job, "ogg");
@@ -247,27 +316,6 @@ fn legacy_to_sm5(job: &Job) -> Result<(), Error> {
     info!("wrote {}", ogg_path.display());
 
     Ok(())
-}
-
-/// Add a user-specified sync offset (in milliseconds) to the post-modernize
-/// audio-sync state. Applied to both `audio_sync_offset_seconds` (which the
-/// SSC writer negates into `#OFFSET`) and `raw_tempo_pairs[0].1` (emitted
-/// verbatim by the SSQ writer as `tempo_data[0]`). Both carry the DDR sign
-/// convention — positive = beat 0 later in the audio — so the same signed
-/// value is added to each. Modernize runs first, so `song.tps` is already
-/// 1000 and seconds-ticks are directly in milliseconds.
-fn apply_sync_offset(result: &mut crate::ssq::SsqParseResult, offset_ms: i32) {
-    if offset_ms == 0 {
-        return;
-    }
-    let offset_seconds = crate::model::Rational::new(offset_ms as i64, 1000)
-        .unwrap_or(crate::model::Rational::zero());
-    if let Ok(new) = result.song.audio_sync_offset_seconds.add(&offset_seconds) {
-        result.song.audio_sync_offset_seconds = new;
-    }
-    if let Some(pair) = result.raw_tempo_pairs.first_mut() {
-        pair.1 = pair.1.saturating_add(offset_ms);
-    }
 }
 
 // -----------------------------------------------------------------------
@@ -787,6 +835,207 @@ mod tests {
         }
     }
 
+    // ---------- --sync-offset-ms on every conversion ----------
+
+    type TestError = Box<dyn std::error::Error>;
+    type TestResult = Result<(), TestError>;
+    /// SSQ `(measure_tick, tempo_data)` anchors.
+    type TempoPairs = Vec<(i32, i32)>;
+
+    /// A small two-segment song with a stop: 160 BPM from beat 0,
+    /// 120 BPM from beat 16, a 0.5 s stop at beat 24, one tap per beat
+    /// to beat 40, and one second of stereo silence.
+    fn bias_fixture_song() -> Result<Song, TestError> {
+        use crate::model::{Bpm, Stop, TempoSegment};
+        let beat = |b: i64| Beat::from_rational(Rational::from_integer(b));
+        let notes = (0..=40)
+            .map(|b| Note {
+                beat: beat(b),
+                kind: NoteKind::Tap,
+                panels: PanelSet::from_bits(Style::Single, 0x01),
+            })
+            .collect();
+        Ok(Song {
+            title: Some("bias".to_string()),
+            artist: None,
+            tps: 1000,
+            tempo_segments: vec![
+                TempoSegment {
+                    start_beat: beat(0),
+                    bpm: Bpm::from_rational(Rational::from_integer(160)),
+                },
+                TempoSegment {
+                    start_beat: beat(16),
+                    bpm: Bpm::from_rational(Rational::from_integer(120)),
+                },
+            ],
+            stops: vec![Stop {
+                at_beat: beat(24),
+                duration_seconds: Rational::new(1, 2)?,
+            }],
+            charts: vec![Chart {
+                style: Style::Single,
+                difficulty: Difficulty::Basic,
+                notes,
+            }],
+            audio: AudioBuffer {
+                samples: vec![0; 44_100 * 2],
+                sample_rate: 44_100,
+                channels: 2,
+            },
+            audio_sync_offset_seconds: Rational::zero(),
+            preview: PreviewSlice {
+                start_seconds: Rational::zero(),
+                length_seconds: Rational::new(1, 2)?,
+            },
+        })
+    }
+
+    /// Write the fixture song as `song.<chart>` + `song.<audio>` in `dir`
+    /// in the input format `from`, and return the two paths.
+    fn write_bias_fixture(dir: &Path, from: Format) -> Result<(PathBuf, PathBuf), TestError> {
+        let song = bias_fixture_song()?;
+        match from {
+            Format::Sm5 => {
+                let chart = dir.join("song.ssc");
+                let audio = dir.join("song.ogg");
+                let mut text = Vec::new();
+                ssc::write(&song, &mut text)?;
+                fs::write(&chart, text)?;
+                let mut ogg_bytes = Vec::new();
+                ogg::encode::encode(&song.audio, &mut ogg_bytes)?;
+                fs::write(&audio, ogg_bytes)?;
+                Ok((chart, audio))
+            }
+            Format::Ddr | Format::DdrLegacy => {
+                let chart = dir.join("song.ssq");
+                let audio = dir.join("song.xwb");
+                let end_beat =
+                    crate::model::Beat::from_measure_ticks(i64::from(chart_end_tick(&song)))?;
+                let pairs = ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))?;
+                let (events, pairs) = synthesize_events(&song, &pairs);
+                let mut ssq_bytes = Vec::new();
+                ssq::writer::write(&song, &events, &pairs, &mut ssq_bytes)?;
+                fs::write(&chart, ssq_bytes)?;
+                write_ddr_audio(
+                    &song.audio,
+                    &song.preview,
+                    "song",
+                    &audio,
+                    &dir.join("song.xsb"),
+                )?;
+                Ok((chart, audio))
+            }
+        }
+    }
+
+    /// Convert the fixture `from → to` with the given bias into a fresh
+    /// output directory under `root`, returning the written chart path.
+    fn convert_fixture_with_bias(
+        root: &Path,
+        from: Format,
+        to: Format,
+        sync_offset_ms: i32,
+    ) -> Result<PathBuf, TestError> {
+        let input_dir = root.join("in");
+        fs::create_dir_all(&input_dir)?;
+        let (chart_in, audio_in) = write_bias_fixture(&input_dir, from)?;
+        let output_dir = root.join(format!("out{sync_offset_ms}"));
+        let job = Job {
+            from,
+            to,
+            chart_in,
+            audio_in,
+            overwrite: true,
+            output_dir: output_dir.clone(),
+            sync_offset_ms,
+            song_code: None,
+            auto_sync: None,
+        };
+        run_one(&job)?;
+        let ext = if to == Format::Ddr { "ssq" } else { "ssc" };
+        Ok(output_dir.join(format!("song.{ext}")))
+    }
+
+    /// Output tempo pairs for a `→ DDR` conversion without and with a bias.
+    fn ddr_output_pairs(from: Format, bias: i32) -> Result<(TempoPairs, TempoPairs), TestError> {
+        let root = tempfile::tempdir()?;
+        let plain = convert_fixture_with_bias(root.path(), from, Format::Ddr, 0)?;
+        let biased = convert_fixture_with_bias(root.path(), from, Format::Ddr, bias)?;
+        let plain = ssq::parse(&fs::read(plain)?)?.raw_tempo_pairs;
+        let biased = ssq::parse(&fs::read(biased)?)?.raw_tempo_pairs;
+        Ok((plain, biased))
+    }
+
+    /// Output songs for a `→ SM5` conversion without and with a bias.
+    fn sm5_output_songs(from: Format, bias: i32) -> Result<(Song, Song), TestError> {
+        let root = tempfile::tempdir()?;
+        let plain = convert_fixture_with_bias(root.path(), from, Format::Sm5, 0)?;
+        let biased = convert_fixture_with_bias(root.path(), from, Format::Sm5, bias)?;
+        Ok((
+            ssc::parse(&fs::read_to_string(plain)?)?,
+            ssc::parse(&fs::read_to_string(biased)?)?,
+        ))
+    }
+
+    fn assert_every_anchor_shifted(plain: &[(i32, i32)], biased: &[(i32, i32)], bias: i32) {
+        assert!(
+            plain.len() >= 4,
+            "fixture should yield several anchors: {plain:?}"
+        );
+        assert_eq!(plain.len(), biased.len(), "anchor count must not change");
+        for (p, b) in plain.iter().zip(biased) {
+            assert_eq!(p.0, b.0, "measure ticks must not change");
+            assert_eq!(
+                b.1 - p.1,
+                bias,
+                "every anchor moves by the bias: {p:?} -> {b:?}"
+            );
+        }
+    }
+
+    fn assert_offset_shifted(plain: &Song, biased: &Song, bias: i32) -> TestResult {
+        let expected = plain
+            .audio_sync_offset_seconds
+            .add(&Rational::new(i64::from(bias), 1000)?)?;
+        assert_eq!(biased.audio_sync_offset_seconds, expected);
+        assert_eq!(
+            biased.tempo_segments, plain.tempo_segments,
+            "BPMs unchanged"
+        );
+        assert_eq!(biased.stops, plain.stops, "stops unchanged");
+        Ok(())
+    }
+
+    #[test]
+    fn sm5_to_ddr_applies_bias_to_every_anchor() -> TestResult {
+        let (plain, biased) = ddr_output_pairs(Format::Sm5, 25)?;
+        assert_every_anchor_shifted(&plain, &biased, 25);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_to_ddr_applies_bias_to_every_anchor() -> TestResult {
+        // Regression: the bias used to move only the first anchor, which
+        // bent the first tempo segment and left the end of the chart
+        // uncorrected.
+        let (plain, biased) = ddr_output_pairs(Format::DdrLegacy, 53)?;
+        assert_every_anchor_shifted(&plain, &biased, 53);
+        Ok(())
+    }
+
+    #[test]
+    fn ddr_to_sm5_applies_bias_to_offset() -> TestResult {
+        let (plain, biased) = sm5_output_songs(Format::Ddr, 25)?;
+        assert_offset_shifted(&plain, &biased, 25)
+    }
+
+    #[test]
+    fn legacy_to_sm5_applies_bias_to_offset() -> TestResult {
+        let (plain, biased) = sm5_output_songs(Format::DdrLegacy, 53)?;
+        assert_offset_shifted(&plain, &biased, 53)
+    }
+
     // ---------- song code / output naming ----------
 
     fn job_for(chart: &str, song_code: Option<&str>) -> Job {
@@ -799,6 +1048,7 @@ mod tests {
             output_dir: PathBuf::from("out"),
             sync_offset_ms: 0,
             song_code: song_code.map(str::to_string),
+            auto_sync: None,
         }
     }
 

@@ -37,6 +37,23 @@ impl Format {
     }
 }
 
+/// What `--auto-sync` does with its measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AutoSyncMode {
+    /// Measure how far the chart is from the audio and correct it.
+    Apply,
+    /// Measure and log the correction only; outputs keep the source sync.
+    Report,
+}
+
+/// Auto-sync settings for one job (`--auto-sync`, `--auto-sync-max-ms`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoSync {
+    pub mode: AutoSyncMode,
+    /// Largest correction that may be applied, in whole ms.
+    pub max_correction_ms: u32,
+}
+
 /// One conversion job: a single chart+audio pair with direction.
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -47,12 +64,17 @@ pub struct Job {
     pub overwrite: bool,
     /// Directory where output files are written.
     pub output_dir: PathBuf,
-    /// Milliseconds to add to the audio-sync offset. Applied on
-    /// `DDR_LEGACY` inputs during modernization.
+    /// Move the whole chart this many milliseconds later relative to
+    /// the audio (`--sync-offset-ms`). Applied on every conversion,
+    /// after modernization, to every tempo anchor (SSQ output) or to
+    /// `#OFFSET` (SSC output).
     pub sync_offset_ms: i32,
     /// Explicit DDR song code (`--song-code`). When set it names the
     /// output files and the XACT wave bank / cues; otherwise the code is
     /// derived from the chart's basename. Only meaningful for `DDR`
     /// output.
     pub song_code: Option<String>,
+    /// Measure and correct the chart's sync against its audio
+    /// (`--auto-sync`). `None` unless the flag was given.
+    pub auto_sync: Option<AutoSync>,
 }

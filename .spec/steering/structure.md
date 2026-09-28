@@ -30,6 +30,7 @@ ddr-chart-tools/
 │   ├── model/              # format-independent types (Song, Chart, Note, …)
 │   ├── ssq/                # SSQ parse + write (modern DDR)
 │   ├── ssq_legacy/         # legacy SSQ modernization (origin shift, tick rescale, aux-chunk drop)
+│   ├── sync/               # auto-sync analysis: onset envelope, beat→time map, chart-vs-audio offset estimate
 │   ├── ssc/                # SSC parse + write
 │   ├── sm/                 # SM parse only (never written)
 │   ├── xwb/                # XWB container parse + write, MS-ADPCM codec (adpcm/)
@@ -74,10 +75,11 @@ ddr-chart-tools/
 | Module | Owns | Does not own |
 |--------|------|--------------|
 | `cli/` | arg parsing, validation, translating CLI intent into a list of conversion jobs | file I/O, format parsing |
-| `job/` | per-job orchestration (dispatch, output paths, overwrite check, Ultramix `.sif` ingestion, sync-offset bias), batch runner with per-file error recovery | CLI concerns, binary-level format details |
+| `job/` | per-job orchestration (dispatch, output paths, overwrite check, Ultramix `.sif` ingestion, sync-offset bias, auto-sync orchestration and the whole-chart timeline shift in `sync_offset.rs`), batch runner with per-file error recovery | CLI concerns, binary-level format details, signal analysis (that is `sync/`) |
 | `model/` | format-independent types and rules about valid combinations | any I/O, any format-specific encoding |
 | `ssq/` | modern SSQ parse + write, chunk types 1/2/3 and 20 (mines); see `docs/ssq_format.md` and `docs/ssq_mine_chunk_format.md` | SSC writing, audio |
 | `ssq_legacy/` | legacy SSQ modernization (origin-shift normalization, TPS rescale, aux-chunk drop) | writing SSQs (defers to `ssq/`) |
+| `sync/` | auto-sync analysis as pure computation: onset envelope of an `AudioBuffer`, beat→time mapping for analysis (`TimeMap`), weighted chart events, and the chart-vs-audio offset estimate with its refusal rules | I/O, format parsing, applying a correction to a song (the job layer does that), audio modification |
 | `ssc/` | SSC text parse + write | SM parsing (separate module), audio |
 | `sm/` | SM text parse only | any writing |
 | `xwb/` | XWB container parse + write, MS-ADPCM decode/encode (`adpcm/` submodule) | OGG concerns |
@@ -98,10 +100,11 @@ ddr-chart-tools/
 | Model types | domain nouns, no format prefix | `Song`, `Chart`, `Note`, `TempoChange` |
 | Format-specific types | prefixed with format name | `SsqChunk`, `SscTag`, `XwbEntry` |
 | Integration test files | `{from}_to_{to}.rs` | `tests/ddr_to_sm5.rs`, `tests/ddr_legacy_to_ddr.rs` |
+| Calibration test | `auto_sync_calibration.rs` — the one test named for what it validates (a constant) rather than a direction; `#[ignore]`d, needs local stock data | `tests/auto_sync_calibration.rs` |
 
 ## Things Agents Should Not Do
 
-- **Don't invent a new top-level module** (`src/manager/`, `src/service/`, etc.). The categories above cover every concern this tool has.
+- **Don't invent a new top-level module** (`src/manager/`, `src/service/`, etc.). The categories above cover every concern this tool has. (`sync/` was added deliberately by the auto-sync design: signal analysis fit no existing module.)
 - **Don't put format-specific types in `model/`**. If something belongs only to SSQ, it goes in `ssq/`.
 - **Don't bypass the model layer**. A direct `src/ssq_to_ssc.rs` is wrong; always `ssq → model → ssc`.
 - **Don't add a file at repo root that isn't in the top-level layout above** without updating this document first.

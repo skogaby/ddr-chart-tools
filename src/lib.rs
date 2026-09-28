@@ -12,6 +12,7 @@ pub mod sm;
 pub mod ssc;
 pub mod ssq;
 pub mod ssq_legacy;
+pub mod sync;
 pub mod util;
 pub mod wavm;
 pub mod xsb;
