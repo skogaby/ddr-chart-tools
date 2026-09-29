@@ -1,0 +1,43 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-772590a6e790e527)
+
+running 4 tests
+test job::tests::legacy_to_ddr_applies_bias_to_every_anchor ... FAILED
+test job::tests::ddr_to_sm5_applies_bias_to_offset ... FAILED
+test job::tests::legacy_to_sm5_applies_bias_to_offset ... ok
+test job::tests::sm5_to_ddr_applies_bias_to_every_anchor ... FAILED
+
+failures:
+
+---- job::tests::legacy_to_ddr_applies_bias_to_every_anchor stdout ----
+
+thread 'job::tests::legacy_to_ddr_applies_bias_to_every_anchor' (9029684) panicked at src/job/mod.rs:945:13:
+assertion `left == right` failed: every anchor moves by the bias: (16384, 6000) -> (16384, 6000)
+  left: 0
+ right: 53
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- job::tests::ddr_to_sm5_applies_bias_to_offset stdout ----
+
+thread 'job::tests::ddr_to_sm5_applies_bias_to_offset' (9029683) panicked at src/job/mod.rs:953:9:
+assertion `left == right` failed
+  left: Rational { num: 0, den: 1 }
+ right: Rational { num: 1, den: 40 }
+
+---- job::tests::sm5_to_ddr_applies_bias_to_every_anchor stdout ----
+
+thread 'job::tests::sm5_to_ddr_applies_bias_to_every_anchor' (9029686) panicked at src/job/mod.rs:945:13:
+assertion `left == right` failed: every anchor moves by the bias: (0, 0) -> (0, 0)
+  left: 0
+ right: 25
+
+
+failures:
+    job::tests::ddr_to_sm5_applies_bias_to_offset
+    job::tests::legacy_to_ddr_applies_bias_to_every_anchor
+    job::tests::sm5_to_ddr_applies_bias_to_every_anchor
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 392 filtered out; finished in 0.14s
+
+error: test failed, to rerun pass `--lib`

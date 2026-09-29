@@ -1,0 +1,79 @@
+    Updating crates.io index
+     Locking 8 packages to latest compatible versions
+      Adding autocfg v1.5.1
+      Adding num-complex v0.4.6
+      Adding num-integer v0.1.47
+      Adding num-traits v0.2.19
+      Adding primal-check v0.3.4
+      Adding rustfft v6.4.1
+      Adding strength_reduce v0.2.4
+      Adding transpose v0.2.3
+   Compiling autocfg v1.5.1
+   Compiling strength_reduce v0.2.4
+   Compiling num-traits v0.2.19
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling transpose v0.2.3
+   Compiling primal-check v0.3.4
+   Compiling rustfft v6.4.1
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+error[E0425]: cannot find type `Envelope` in this scope
+  --> src/sync/onset.rs:41:24
+   |
+41 |     fn peak_near(env: &Envelope, t: f64) -> f64 {
+   |                        ^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `Envelope` in this scope
+   --> src/sync/onset.rs:124:19
+    |
+124 |         let env = Envelope {
+    |                   ^^^^^^^^ not found in this scope
+
+warning: unused import: `super::*`
+ --> src/sync/onset.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0425]: cannot find function `envelope` in this scope
+  --> src/sync/onset.rs:70:19
+   |
+70 |         let env = envelope(&clicks(rate, 6.5, &times)).ok_or("envelope")?;
+   |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `envelope` in this scope
+   --> src/sync/onset.rs:103:19
+    |
+103 |         let env = envelope(&clicks(44_100, 2.0, &[])).ok_or("envelope")?;
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `envelope` in this scope
+   --> src/sync/onset.rs:116:17
+    |
+116 |         assert!(envelope(&buf(Vec::new(), 44_100, 2)).is_none(), "empty");
+    |                 ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `envelope` in this scope
+   --> src/sync/onset.rs:117:17
+    |
+117 |         assert!(envelope(&buf(vec![0; 88_200], 0, 2)).is_none(), "zero rate");
+    |                 ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `envelope` in this scope
+   --> src/sync/onset.rs:118:17
+    |
+118 |         assert!(envelope(&buf(vec![0; 88_200], 44_100, 0)).is_none(), "zero channels");
+    |                 ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `envelope` in this scope
+   --> src/sync/onset.rs:119:17
+    |
+119 |         assert!(envelope(&buf(vec![0; 200], 44_100, 2)).is_none(), "shorter than a window");
+    |                 ^^^^^^^^ not found in this scope
+
+Some errors have detailed explanations: E0422, E0425.
+For more information about an error, try `rustc --explain E0422`.
+warning: `ddr-chart-tools` (lib test) generated 1 warning
+error: could not compile `ddr-chart-tools` (lib test) due to 8 previous errors; 1 warning emitted

@@ -1,0 +1,13 @@
+[package]
+name = "sync-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Throwaway auto-sync prototype. Not production code; never carried into src/."
+
+# Standalone: not a member of any parent workspace.
+[workspace]
+
+[dependencies]
+ddr-chart-tools = { path = "../../../../.." }
+rustfft = "6"

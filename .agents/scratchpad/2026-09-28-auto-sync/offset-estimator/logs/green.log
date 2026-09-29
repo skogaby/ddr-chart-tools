@@ -1,0 +1,20 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-6c226ebcda08a1eb)
+
+running 12 tests
+test sync::estimate::tests::verdict_rounds_half_away_and_caps ... ok
+test sync::estimate::tests::fixture_has_enough_events ... ok
+test sync::estimate::tests::refuses_without_audio ... ok
+test sync::estimate::tests::median_and_rival_helpers ... ok
+test sync::estimate::tests::refuses_too_few_events ... ok
+test sync::estimate::tests::refuses_two_equal_alignments ... ok
+test sync::estimate::tests::refuses_when_halves_disagree ... ok
+test sync::estimate::tests::offset_chart_gets_rounded_correction ... ok
+test sync::estimate::tests::refuses_peak_at_search_edge ... ok
+test sync::estimate::tests::in_sync_chart_is_unchanged ... ok
+test sync::estimate::tests::refuses_beyond_cap ... ok
+test sync::estimate::tests::recovers_audio_shifts ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 415 filtered out; finished in 6.61s
+

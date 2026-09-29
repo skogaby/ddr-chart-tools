@@ -1,0 +1,32 @@
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running tests/auto_sync_calibration.rs (target/release/deps/auto_sync_calibration-84e53ac6bb925201)
+
+running 1 test
+  skip ifly: step chunk at byte 456: freeze-end at tick 23552 has no matching head for panel 4
+  skip hart: invalid magic at byte 0: expected WBND
+test calibrate_target_offset_against_stock_catalogue has been running for over 60 seconds
+  skip mixn: invalid magic at byte 0: expected WBND
+  skip itiz: invalid magic at byte 0: expected WBND
+  skip souv: invalid magic at byte 0: expected WBND
+  skip lich: step chunk at byte 9048: freeze-end at tick 442112 has no matching head for panel 7
+
+auto-sync calibration (TPS 1000 stock songs)
+  measured 711; skipped: 1 missing, 723 not TPS 1000, 6 unreadable, 0 not measured
+  T = median(m + c) = -2.107 ms (shipped -2.11 ms)
+  |m + c - T| within 0.5 / 1 / 2 / 3 ms: 73.0% / 94.1% / 97.6% / 98.3%
+  accepted 99.3%: {"apply": 672, "refused HalvesDisagree": 5, "unchanged": 34}
+  largest disagreements (our correction vs community, ms):
+    reci     ours   +1.83  community  +32  diff  -30.17  Apply { delta_ms: 2 }
+    hane     ours  +11.91  community   -0  diff  +11.91  Apply { delta_ms: 12 }
+    wwto     ours   +2.24  community  +12  diff   -9.76  Apply { delta_ms: 2 }
+    aoba     ours  -12.31  community  -22  diff   +9.69  Apply { delta_ms: -12 }
+    tiho     ours   -6.80  community   -0  diff   -6.80  Apply { delta_ms: -7 }
+    bhny     ours   +0.99  community   +6  diff   -5.01  Apply { delta_ms: 1 }
+    scre     ours   +1.31  community   +6  diff   -4.69  Apply { delta_ms: 1 }
+    frag     ours   +1.65  community   +6  diff   -4.35  Apply { delta_ms: 2 }
+    file     ours   -3.74  community   -0  diff   -3.74  Apply { delta_ms: -4 }
+    tpp2     ours   +0.56  community   +4  diff   -3.44  Apply { delta_ms: 1 }
+test calibrate_target_offset_against_stock_catalogue ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 151.98s
+

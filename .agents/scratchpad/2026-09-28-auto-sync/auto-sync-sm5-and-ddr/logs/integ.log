@@ -1,0 +1,22 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/ddr_to_sm5.rs (target/debug/deps/ddr_to_sm5-3ad2ada22ce7c0d6)
+
+running 3 tests
+test report_mode_writes_the_same_chart ... ok
+test bias_composes_with_auto_sync ... ok
+test auto_sync_converges ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.76s
+
+     Running tests/sm5_to_ddr.rs (target/debug/deps/sm5_to_ddr-ca290cd3226a89b4)
+
+running 5 tests
+test refusal_keeps_sync_and_succeeds ... ok
+test report_mode_writes_the_same_chart ... ok
+test auto_sync_converges ... ok
+test bias_composes_with_auto_sync ... ok
+test auto_sync_is_linear_in_audio_shift ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s
+

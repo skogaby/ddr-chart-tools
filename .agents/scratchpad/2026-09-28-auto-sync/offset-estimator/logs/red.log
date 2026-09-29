@@ -1,0 +1,157 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+error[E0432]: unresolved import `estimate::estimate`
+  --> src/sync/mod.rs:21:9
+   |
+21 | pub use estimate::estimate;
+   |         ^^^^^^^^^^^^^^^^^^ no `estimate` in `sync::estimate`
+
+error[E0425]: cannot find function `median` in this scope
+   --> src/sync/estimate.rs:218:20
+    |
+218 |         assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+    |                    ^^^^^^ not found in this scope
+    |
+note: function `crate::sync::onset::tests::median` exists but is inaccessible
+   --> src/sync/onset.rs:194:5
+    |
+194 |     fn median(mut v: Vec<f64>) -> f64 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find function `median` in this scope
+   --> src/sync/estimate.rs:219:20
+    |
+219 |         assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), 2.5);
+    |                    ^^^^^^ not found in this scope
+    |
+note: function `crate::sync::onset::tests::median` exists but is inaccessible
+   --> src/sync/onset.rs:194:5
+    |
+194 |     fn median(mut v: Vec<f64>) -> f64 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+warning: unused import: `super::*`
+ --> src/sync/estimate.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0425]: cannot find function `estimate` in this scope
+  --> src/sync/estimate.rs:87:9
+   |
+87 |         estimate(audio, events, params)
+   |         ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:119:19
+    |
+119 |         let est = estimate(&audio(&ev, 0.0, 0.0), &ev, &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:132:19
+    |
+132 |         let est = estimate(&empty, &events(), &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:145:19
+    |
+145 |         let est = estimate(&audio(&ev, 45.0 - m0, 0.0), &ev, &params);
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:158:19
+    |
+158 |         let est = estimate(&audio(&ev, 35.0 + TARGET_OFFSET_MS - m0, 0.0), &ev, &params);
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:170:19
+    |
+170 |         let est = estimate(&audio(&ev, 0.0, 0.0), &doubled, &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:178:19
+    |
+178 |         let est = estimate(&audio(&ev, 0.0, 10.0), &ev, &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:188:19
+    |
+188 |         let est = estimate(&audio(&ev, 0.0, 0.0), &chart, &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `estimate` in this scope
+   --> src/sync/estimate.rs:199:19
+    |
+199 |         let est = estimate(&audio(&ev, 0.0, 0.0), &chart, &Params::default());
+    |                   ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:206:20
+    |
+206 |         assert_eq!(verdict(0.49, 60), Outcome::Unchanged);
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:207:20
+    |
+207 |         assert_eq!(verdict(0.5, 60), Outcome::Apply { delta_ms: 1 });
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:208:20
+    |
+208 |         assert_eq!(verdict(-0.5, 60), Outcome::Apply { delta_ms: -1 });
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:209:20
+    |
+209 |         assert_eq!(verdict(-1.49, 60), Outcome::Apply { delta_ms: -1 });
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:210:20
+    |
+210 |         assert_eq!(verdict(60.0, 60), Outcome::Apply { delta_ms: 60 });
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:211:20
+    |
+211 |         assert_eq!(verdict(60.2, 60), Outcome::Refused(Refusal::BeyondCap));
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:212:20
+    |
+212 |         assert_eq!(verdict(-60.2, 60), Outcome::Refused(Refusal::BeyondCap));
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `verdict` in this scope
+   --> src/sync/estimate.rs:213:20
+    |
+213 |         assert_eq!(verdict(f64::NAN, 60), Outcome::Refused(Refusal::BeyondCap));
+    |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `rival_ratio` in this scope
+   --> src/sync/estimate.rs:224:18
+    |
+224 |         assert!((rival_ratio(&curve, 2) - 0.6).abs() < 1e-12);
+    |                  ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `rival_ratio` in this scope
+   --> src/sync/estimate.rs:228:18
+    |
+228 |         assert!((rival_ratio(&curve, 2) - 0.0).abs() < 1e-12);
+    |                  ^^^^^^^^^^^ not found in this scope
+
+Some errors have detailed explanations: E0425, E0432.
+For more information about an error, try `rustc --explain E0425`.
+warning: `ddr-chart-tools` (lib test) generated 1 warning
+error: could not compile `ddr-chart-tools` (lib test) due to 22 previous errors; 1 warning emitted

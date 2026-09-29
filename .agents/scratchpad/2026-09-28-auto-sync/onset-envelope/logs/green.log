@@ -1,0 +1,16 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.35s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-6c226ebcda08a1eb)
+
+running 5 tests
+test sync::onset::tests::sample_interpolates_and_is_zero_outside ... ok
+test sync::onset::tests::degenerate_audio_has_no_envelope ... ok
+test sync::onset::tests::silence_is_flat ... ok
+test sync::onset::tests::click_train_peaks_follow_clicks_with_constant_lag ... ok
+test sync::onset::tests::sample_rate_does_not_move_onsets ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 410 filtered out; finished in 1.27s
+
+real 8.31
+user 13.11
+sys 0.77

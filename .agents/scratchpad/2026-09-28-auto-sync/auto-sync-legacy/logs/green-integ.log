@@ -1,0 +1,22 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s
+     Running tests/ddr_legacy_to_ddr.rs (target/debug/deps/ddr_legacy_to_ddr-fd6b90ab38ace698)
+
+running 5 tests
+test undecodable_passthrough_audio_skips_auto_sync ... ok
+test passthrough_audio_is_untouched_while_the_chart_moves ... ok
+test report_mode_writes_the_same_chart ... ok
+test auto_sync_converges_on_wavm_audio ... ok
+test auto_sync_is_linear_in_audio_shift ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.25s
+
+     Running tests/ddr_legacy_to_sm5.rs (target/debug/deps/ddr_legacy_to_sm5-30cc4b6b46850198)
+
+running 3 tests
+test report_mode_writes_the_same_chart ... ok
+test bias_composes_with_auto_sync ... ok
+test auto_sync_converges_on_wavm_audio ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+

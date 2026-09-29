@@ -1,0 +1,146 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+error[E0432]: unresolved imports `events::chart_events`, `events::SyncEvent`
+  --> src/sync/mod.rs:19:18
+   |
+19 | pub use events::{chart_events, SyncEvent};
+   |                  ^^^^^^^^^^^^  ^^^^^^^^^ no `SyncEvent` in `sync::events`
+   |                  |
+   |                  no `chart_events` in `sync::events`
+
+error[E0432]: unresolved import `timemap::TimeMap`
+  --> src/sync/mod.rs:20:9
+   |
+20 | pub use timemap::TimeMap;
+   |         ^^^^^^^^^^^^^^^^ no `TimeMap` in `sync::timemap`
+
+error[E0422]: cannot find struct, variant or union type `SyncEvent` in this scope
+  --> src/sync/events.rs:53:17
+   |
+53 |                 SyncEvent {
+   |                 ^^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `SyncEvent` in this scope
+  --> src/sync/events.rs:57:17
+   |
+57 |                 SyncEvent {
+   |                 ^^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `SyncEvent` in this scope
+  --> src/sync/events.rs:81:18
+   |
+81 |             vec![SyncEvent {
+   |                  ^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `TimeMap` in this scope
+  --> src/sync/timemap.rs:16:54
+   |
+16 |     fn map(pairs: &[(i32, i32)], tps: u32) -> Result<TimeMap, Box<dyn std::error::Error>> {
+   |                                                      ^^^^^^^ not found in this scope
+   |
+help: you might be missing a type parameter
+   |
+16 |     fn map<TimeMap>(pairs: &[(i32, i32)], tps: u32) -> Result<TimeMap, Box<dyn std::error::Error>> {
+   |           +++++++++
+
+warning: unused import: `super::*`
+ --> src/sync/events.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::*`
+ --> src/sync/timemap.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+
+error[E0425]: cannot find function `chart_events` in this scope
+  --> src/sync/events.rs:49:22
+   |
+49 |         let events = chart_events(&[a, b], &half_second_beats()?);
+   |                      ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `chart_events` in this scope
+  --> src/sync/events.rs:69:17
+   |
+69 |         assert!(chart_events(&[c], &half_second_beats()?).is_empty());
+   |                 ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `chart_events` in this scope
+  --> src/sync/events.rs:80:13
+   |
+80 |             chart_events(&[c], &half_second_beats()?),
+   |             ^^^^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `TimeMap` in this scope
+  --> src/sync/timemap.rs:17:9
+   |
+17 |         TimeMap::from_tempo_pairs(pairs, tps).ok_or_else(|| "map should build".into())
+   |         ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+  --> src/sync/timemap.rs:93:17
+   |
+93 |         assert!(TimeMap::from_tempo_pairs(&[(0, 0)], 1000).is_none(), "one pair");
+   |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+  --> src/sync/timemap.rs:94:17
+   |
+94 |         assert!(TimeMap::from_tempo_pairs(&[(0, 0), (4096, 2000)], 0).is_none(), "TPS 0");
+   |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+  --> src/sync/timemap.rs:96:13
+   |
+96 |             TimeMap::from_tempo_pairs(&[(0, 0), (4096, 2000), (2048, 3000)], 1000).is_none(),
+   |             ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:100:13
+    |
+100 |             TimeMap::from_tempo_pairs(&[(0, 0), (0, 500), (0, 900)], 1000).is_none(),
+    |             ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:108:17
+    |
+108 |         let m = TimeMap::from_song(&s).ok_or("map should build")?;
+    |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:126:25
+    |
+126 |         let from_song = TimeMap::from_song(&s).ok_or("map should build")?;
+    |                         ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:137:17
+    |
+137 |         let m = TimeMap::from_song(&s).ok_or("map should build")?;
+    |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:145:17
+    |
+145 |         assert!(TimeMap::from_song(&song(Vec::new(), Vec::new(), 0)).is_none());
+    |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:146:17
+    |
+146 |         assert!(TimeMap::from_song(&song(vec![segment(0, 0)], Vec::new(), 0)).is_none());
+    |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+error[E0433]: cannot find type `TimeMap` in this scope
+   --> src/sync/timemap.rs:147:17
+    |
+147 |         assert!(TimeMap::from_song(&song(vec![segment(0, -120)], Vec::new(), 0)).is_none());
+    |                 ^^^^^^^ use of undeclared type `TimeMap`
+
+Some errors have detailed explanations: E0422, E0425, E0432, E0433.
+For more information about an error, try `rustc --explain E0422`.
+warning: `ddr-chart-tools` (lib test) generated 2 warnings
+error: could not compile `ddr-chart-tools` (lib test) due to 20 previous errors; 2 warnings emitted

@@ -1,0 +1,32 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+warning: variable does not need to be mutable
+   --> src/sync/timemap.rs:104:13
+    |
+104 |         let mut push = |anchors: &mut Vec<(f64, f64)>, beat: f64, secs: f64| {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ddr-chart-tools` (lib test) generated 1 warning (run `cargo fix --lib -p ddr-chart-tools --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.81s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-772590a6e790e527)
+
+running 13 tests
+test sync::timemap::tests::pairs_reject_malformed ... ok
+test sync::timemap::tests::pairs_tps_scales_seconds ... ok
+test sync::timemap::tests::pairs_extrapolate_before_and_after ... ok
+test sync::timemap::tests::pairs_single_bpm_interpolates ... ok
+test sync::events::tests::mines_only_chart_contributes_nothing ... ok
+test sync::timemap::tests::pairs_extrapolate_past_trailing_stop ... ok
+test sync::timemap::tests::pairs_stop_note_on_stop_takes_stop_start ... ok
+test sync::timemap::tests::song_extrapolates_with_final_bpm ... ok
+test sync::timemap::tests::song_first_bpm_applies_from_beat_zero ... ok
+test sync::timemap::tests::song_matches_synthesized_pairs ... ok
+test sync::events::tests::shocks_count ... ok
+test sync::timemap::tests::song_rejects_no_segments_and_nonpositive_bpm ... ok
+test sync::events::tests::weights_count_charts_not_notes ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 397 filtered out; finished in 0.00s
+

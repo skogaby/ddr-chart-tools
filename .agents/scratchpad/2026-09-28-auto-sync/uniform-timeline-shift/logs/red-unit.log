@@ -1,0 +1,59 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.59s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-772590a6e790e527)
+
+running 6 tests
+test job::sync_offset::tests::negative_shift_moves_everything_earlier ... FAILED
+test job::sync_offset::tests::shifts_every_pair_and_preserves_slopes_and_stops ... FAILED
+test job::sync_offset::tests::overflow_is_reported_without_mutation ... FAILED
+test job::sync_offset::tests::single_bpm_song_moves_its_final_pair ... FAILED
+test job::sync_offset::tests::zero_shift_is_a_no_op ... ok
+test job::sync_offset::tests::empty_pair_list_shifts_only_the_model_offset ... FAILED
+
+failures:
+
+---- job::sync_offset::tests::negative_shift_moves_everything_earlier stdout ----
+
+thread 'job::sync_offset::tests::negative_shift_moves_everything_earlier' (9025786) panicked at src/job/sync_offset.rs:120:9:
+assertion `left == right` failed
+  left: [(0, 20), (4096, 2020), (8192, 4020), (8192, 4520), (16384, 8520)]
+ right: [(0, -10), (4096, 1990), (8192, 3990), (8192, 4490), (16384, 8490)]
+
+---- job::sync_offset::tests::shifts_every_pair_and_preserves_slopes_and_stops stdout ----
+
+thread 'job::sync_offset::tests::shifts_every_pair_and_preserves_slopes_and_stops' (9025788) panicked at src/job/sync_offset.rs:84:9:
+assertion `left == right` failed
+  left: [(0, 20), (4096, 2020), (8192, 4020), (8192, 4520), (16384, 8520)]
+ right: [(0, 73), (4096, 2073), (8192, 4073), (8192, 4573), (16384, 8573)]
+
+---- job::sync_offset::tests::overflow_is_reported_without_mutation stdout ----
+
+thread 'job::sync_offset::tests::overflow_is_reported_without_mutation' (9025787) panicked at src/job/sync_offset.rs:149:9:
+got Ok(())
+
+---- job::sync_offset::tests::single_bpm_song_moves_its_final_pair stdout ----
+
+thread 'job::sync_offset::tests::single_bpm_song_moves_its_final_pair' (9025789) panicked at src/job/sync_offset.rs:106:9:
+assertion `left == right` failed
+  left: [(0, 0), (118784, 58000)]
+ right: [(0, 53), (118784, 58053)]
+
+---- job::sync_offset::tests::empty_pair_list_shifts_only_the_model_offset stdout ----
+
+thread 'job::sync_offset::tests::empty_pair_list_shifts_only_the_model_offset' (9025785) panicked at src/job/sync_offset.rs:139:9:
+assertion `left == right` failed
+  left: Rational { num: 0, den: 1 }
+ right: Rational { num: 7, den: 1000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    job::sync_offset::tests::empty_pair_list_shifts_only_the_model_offset
+    job::sync_offset::tests::negative_shift_moves_everything_earlier
+    job::sync_offset::tests::overflow_is_reported_without_mutation
+    job::sync_offset::tests::shifts_every_pair_and_preserves_slopes_and_stops
+    job::sync_offset::tests::single_bpm_song_moves_its_final_pair
+
+test result: FAILED. 1 passed; 5 failed; 0 ignored; 0 measured; 386 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

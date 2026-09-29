@@ -1,0 +1,57 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.06s
+     Running tests/ddr_to_sm5.rs (target/debug/deps/ddr_to_sm5-3ad2ada22ce7c0d6)
+
+running 3 tests
+test auto_sync_converges ... FAILED
+test report_mode_writes_the_same_chart ... ok
+test bias_composes_with_auto_sync ... ok
+
+failures:
+
+---- auto_sync_converges stdout ----
+Error: "no auto-sync log line in:\n[2026-09-29T00:12:32Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmp22YWoJ/synced/sync.ssc\n[2026-09-29T00:12:32Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmp22YWoJ/synced/sync.ogg\n"
+
+
+failures:
+    auto_sync_converges
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+
+error: test failed, to rerun pass `--test ddr_to_sm5`
+     Running tests/sm5_to_ddr.rs (target/debug/deps/sm5_to_ddr-ca290cd3226a89b4)
+
+running 5 tests
+test auto_sync_converges ... FAILED
+test auto_sync_is_linear_in_audio_shift ... FAILED
+test refusal_keeps_sync_and_succeeds ... FAILED
+test bias_composes_with_auto_sync ... ok
+test report_mode_writes_the_same_chart ... FAILED
+
+failures:
+
+---- auto_sync_converges stdout ----
+Error: "no auto-sync log line in:\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpBNdJt4/synced/sync.ssq\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] encoding 44100 Hz 2ch PCM to MS-ADPCM (bank declares 44100 Hz); wave bank and cues named \"sync\"\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpBNdJt4/synced/sync.xwb\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpBNdJt4/synced/sync.xsb\n"
+
+---- auto_sync_is_linear_in_audio_shift stdout ----
+Error: "no auto-sync log line in:\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmp53EtGc/early-out/sync.ssq\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] encoding 44100 Hz 2ch PCM to MS-ADPCM (bank declares 44100 Hz); wave bank and cues named \"sync\"\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmp53EtGc/early-out/sync.xwb\n[2026-09-29T00:12:33Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmp53EtGc/early-out/sync.xsb\n"
+
+---- refusal_keeps_sync_and_succeeds stdout ----
+Error: "no auto-sync log line in:\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpvGUINb/synced/sync.ssq\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] encoding 44100 Hz 2ch PCM to MS-ADPCM (bank declares 44100 Hz); wave bank and cues named \"sync\"\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpvGUINb/synced/sync.xwb\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpvGUINb/synced/sync.xsb\n"
+
+---- report_mode_writes_the_same_chart stdout ----
+Error: "no auto-sync log line in:\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpdvO1ud/report/sync.ssq\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] encoding 44100 Hz 2ch PCM to MS-ADPCM (bank declares 44100 Hz); wave bank and cues named \"sync\"\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpdvO1ud/report/sync.xwb\n[2026-09-29T00:12:34Z INFO  ddr_chart_tools::job] wrote /var/folders/31/yq10yrk557l1q0wyb1nx4vg40000gp/T/.tmpdvO1ud/report/sync.xsb\n"
+
+
+failures:
+    auto_sync_converges
+    auto_sync_is_linear_in_audio_shift
+    refusal_keeps_sync_and_succeeds
+    report_mode_writes_the_same_chart
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+error: test failed, to rerun pass `--test sm5_to_ddr`
+error: 2 targets failed:
+    `--test ddr_to_sm5`
+    `--test sm5_to_ddr`

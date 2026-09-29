@@ -1,0 +1,14 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-772590a6e790e527)
+
+running 6 tests
+test job::sync_offset::tests::empty_pair_list_shifts_only_the_model_offset ... ok
+test job::sync_offset::tests::single_bpm_song_moves_its_final_pair ... ok
+test job::sync_offset::tests::overflow_is_reported_without_mutation ... ok
+test job::sync_offset::tests::negative_shift_moves_everything_earlier ... ok
+test job::sync_offset::tests::zero_shift_is_a_no_op ... ok
+test job::sync_offset::tests::shifts_every_pair_and_preserves_slopes_and_stops ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 386 filtered out; finished in 0.00s
+

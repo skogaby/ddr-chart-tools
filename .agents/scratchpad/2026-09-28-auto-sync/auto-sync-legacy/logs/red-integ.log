@@ -1,0 +1,68 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/ddr_legacy_to_ddr.rs (target/debug/deps/ddr_legacy_to_ddr-fd6b90ab38ace698)
+
+running 5 tests
+test passthrough_audio_is_untouched_while_the_chart_moves ... FAILED
+test undecodable_passthrough_audio_skips_auto_sync ... FAILED
+test auto_sync_converges_on_wavm_audio ... FAILED
+test auto_sync_is_linear_in_audio_shift ... FAILED
+test report_mode_writes_the_same_chart ... FAILED
+
+failures:
+
+---- passthrough_audio_is_untouched_while_the_chart_moves stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- undecodable_passthrough_audio_skips_auto_sync stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- auto_sync_converges_on_wavm_audio stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- auto_sync_is_linear_in_audio_shift stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- report_mode_writes_the_same_chart stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+
+failures:
+    auto_sync_converges_on_wavm_audio
+    auto_sync_is_linear_in_audio_shift
+    passthrough_audio_is_untouched_while_the_chart_moves
+    report_mode_writes_the_same_chart
+    undecodable_passthrough_audio_skips_auto_sync
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s
+
+error: test failed, to rerun pass `--test ddr_legacy_to_ddr`
+     Running tests/ddr_legacy_to_sm5.rs (target/debug/deps/ddr_legacy_to_sm5-30cc4b6b46850198)
+
+running 3 tests
+test bias_composes_with_auto_sync ... FAILED
+test auto_sync_converges_on_wavm_audio ... FAILED
+test report_mode_writes_the_same_chart ... FAILED
+
+failures:
+
+---- bias_composes_with_auto_sync stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- auto_sync_converges_on_wavm_audio stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+---- report_mode_writes_the_same_chart stdout ----
+Error: "conversion failed (exit status: 2):\nerror: --auto-sync does not support --from-format DDR_LEGACY yet\n"
+
+
+failures:
+    auto_sync_converges_on_wavm_audio
+    bias_composes_with_auto_sync
+    report_mode_writes_the_same_chart
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s
+
+error: test failed, to rerun pass `--test ddr_legacy_to_sm5`
+error: 2 targets failed:
+    `--test ddr_legacy_to_ddr`
+    `--test ddr_legacy_to_sm5`

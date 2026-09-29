@@ -1,0 +1,9 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.57s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-772590a6e790e527)
+
+running 1 test
+test cli::tests::sync_offset_reaches_sm5_and_ddr_jobs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 396 filtered out; finished in 0.00s
+

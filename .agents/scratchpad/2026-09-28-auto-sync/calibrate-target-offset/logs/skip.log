@@ -1,0 +1,10 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/auto_sync_calibration.rs (target/debug/deps/auto_sync_calibration-bf5fee44a23c5ce5)
+
+running 1 test
+skipping: set DDR_WORLD_INSTALL and DDR_SYNC_OFFSETS_CSV to calibrate
+test calibrate_target_offset_against_stock_catalogue ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

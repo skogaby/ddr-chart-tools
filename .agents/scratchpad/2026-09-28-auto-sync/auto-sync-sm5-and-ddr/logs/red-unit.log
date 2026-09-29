@@ -1,0 +1,158 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+error[E0432]: unresolved imports `job::AutoSync`, `job::AutoSyncMode`
+   --> src/cli/mod.rs:233:15
+    |
+233 |     use job::{AutoSync, AutoSyncMode};
+    |               ^^^^^^^^  ^^^^^^^^^^^^ no `AutoSyncMode` in `cli::job`
+    |               |
+    |               no `AutoSync` in `cli::job`
+
+error[E0432]: unresolved import `crate::cli::job::AutoSyncMode`
+   --> src/job/sync_offset.rs:159:9
+    |
+159 |     use crate::cli::job::AutoSyncMode;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `AutoSyncMode` in `cli::job`
+
+error[E0609]: no field `auto_sync` on type `cli::job::Job`
+   --> src/cli/mod.rs:521:43
+    |
+521 |         assert!(c.into_jobs().unwrap()[0].auto_sync.is_none());
+    |                                           ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `from`, `to`, `chart_in`, `audio_in`, `overwrite` ... and 3 others
+
+error[E0609]: no field `auto_sync` on type `cli::job::Job`
+   --> src/cli/mod.rs:530:21
+    |
+530 |             jobs[0].auto_sync,
+    |                     ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `from`, `to`, `chart_in`, `audio_in`, `overwrite` ... and 3 others
+
+error[E0609]: no field `auto_sync` on type `cli::Cli`
+   --> src/cli/mod.rs:552:22
+    |
+552 |         assert_eq!(c.auto_sync, Some(AutoSyncMode::Apply));
+    |                      ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `from_format`, `to_format`, `chartfile`, `audiofile`, `input_folder` ... and 6 others
+
+error[E0609]: no field `auto_sync` on type `cli::job::Job`
+   --> src/cli/mod.rs:560:28
+    |
+560 |         assert_eq!(jobs[0].auto_sync.map(|a| a.mode), Some(AutoSyncMode::Report));
+    |                            ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `from`, `to`, `chart_in`, `audio_in`, `overwrite` ... and 3 others
+
+error[E0609]: no field `auto_sync` on type `cli::job::Job`
+   --> src/cli/mod.rs:568:28
+    |
+568 |         assert_eq!(jobs[0].auto_sync.map(|a| a.max_correction_ms), Some(90));
+    |                            ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `from`, `to`, `chart_in`, `audio_in`, `overwrite` ... and 3 others
+
+error[E0599]: no variant, associated function, or constant named `AutoSyncMaxRequiresAutoSync` found for enum `cli::CliError` in the current scope
+   --> src/cli/mod.rs:576:27
+    |
+ 14 | pub enum CliError {
+    | ----------------- variant, associated function, or constant `AutoSyncMaxRequiresAutoSync` not found for this enum
+...
+576 |             Err(CliError::AutoSyncMaxRequiresAutoSync)
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `cli::CliError`
+
+error[E0599]: no variant named `AutoSyncMaxOutOfRange` found for enum `cli::CliError`
+   --> src/cli/mod.rs:585:54
+    |
+ 14 | pub enum CliError {
+    | ----------------- variant `AutoSyncMaxOutOfRange` not found here
+...
+585 |                 matches!(c.validate(), Err(CliError::AutoSyncMaxOutOfRange { .. })),
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^ variant not found in `cli::CliError`
+
+error[E0599]: no variant, associated function, or constant named `AutoSyncLegacyNotYetSupported` found for enum `cli::CliError` in the current scope
+   --> src/cli/mod.rs:607:27
+    |
+ 14 | pub enum CliError {
+    | ----------------- variant, associated function, or constant `AutoSyncLegacyNotYetSupported` not found for this enum
+...
+607 |             Err(CliError::AutoSyncLegacyNotYetSupported)
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `cli::CliError`
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:175:17
+    |
+175 |         let d = decide(
+    |                 ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:195:17
+    |
+195 |         let d = decide(
+    |                 ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:207:17
+    |
+207 |         let d = decide(&measured(Outcome::Unchanged, 0.3), AutoSyncMode::Apply, 60);
+    |                 ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:216:17
+    |
+216 |         let d = decide(
+    |                 ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:229:17
+    |
+229 |         let d = decide(
+    |                 ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:248:21
+    |
+248 |             let d = decide(&measured(Outcome::Refused(reason), 64.0), AutoSyncMode::Apply, 60);
+    |                     ^^^^^^ not found in this scope
+
+error[E0599]: no method named `key` found for enum `sync::Refusal` in the current scope
+   --> src/job/sync_offset.rs:254:65
+    |
+254 |                 d.message.contains(&format!("reason={}", reason.key())),
+    |                                                                 ^^^ method not found in `sync::Refusal`
+    |
+   ::: src/sync/mod.rs:81:1
+    |
+ 81 | pub enum Refusal {
+    | ---------------- method `key` not found for this enum
+
+error[E0425]: cannot find function `decide` in this scope
+   --> src/job/sync_offset.rs:272:21
+    |
+272 |             let d = decide(&est, AutoSyncMode::Apply, 60);
+    |                     ^^^^^^ not found in this scope
+
+error[E0599]: no method named `key` found for enum `sync::Refusal` in the current scope
+   --> src/job/sync_offset.rs:276:94
+    |
+276 |                 d.message.ends_with(&format!("auto_sync=refused reason={} events=10", reason.key())),
+    |                                                                                              ^^^ method not found in `sync::Refusal`
+    |
+   ::: src/sync/mod.rs:81:1
+    |
+ 81 | pub enum Refusal {
+    | ---------------- method `key` not found for this enum
+
+error[E0599]: no method named `key` found for enum `sync::Refusal` in the current scope
+   --> src/sync/mod.rs:199:31
+    |
+ 81 | pub enum Refusal {
+    | ---------------- method `key` not found for this enum
+...
+199 |             assert_eq!(reason.key(), key);
+    |                               ^^^ method not found in `sync::Refusal`
+
+Some errors have detailed explanations: E0425, E0432, E0599, E0609.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `ddr-chart-tools` (lib test) due to 20 previous errors

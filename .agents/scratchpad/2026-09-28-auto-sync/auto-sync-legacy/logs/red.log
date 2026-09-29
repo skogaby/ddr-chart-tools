@@ -1,0 +1,36 @@
+   Compiling ddr-chart-tools v0.1.0 (/Users/holmej/Desktop/Projects/ddr-chart-tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+     Running unittests src/lib.rs (target/debug/deps/ddr_chart_tools-6c226ebcda08a1eb)
+
+running 1 test
+test cli::tests::auto_sync_accepts_legacy_input ... FAILED
+
+failures:
+
+---- cli::tests::auto_sync_accepts_legacy_input stdout ----
+
+thread 'cli::tests::auto_sync_accepts_legacy_input' (9166032) panicked at src/cli/mod.rs:661:22:
+called `Result::unwrap()` on an `Err` value: AutoSyncLegacyNotYetSupported
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cli::tests::auto_sync_accepts_legacy_input
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 442 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+     Running tests/ddr_legacy_to_ddr.rs (target/debug/deps/ddr_legacy_to_ddr-fd6b90ab38ace698)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/ddr_legacy_to_sm5.rs (target/debug/deps/ddr_legacy_to_sm5-30cc4b6b46850198)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `--lib`
