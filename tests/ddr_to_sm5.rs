@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{auto_sync_tail, convert, synthetic_song, tail_number, write_sm5_input, TestResult};
-use ddr_chart_tools::model::Rational;
+use ddr_chart_tools::model::{Beat, Difficulty, Note, NoteKind, PanelSet, Rational, Style};
 use ddr_chart_tools::ssc;
 
 /// A DDR `sync.ssq` + `sync.xwb` made by the tool from a synthetic song
@@ -89,5 +89,76 @@ fn bias_composes_with_auto_sync() -> TestResult {
         "#OFFSET 0.010 s lower"
     );
     assert_eq!(a.tempo_segments, b.tempo_segments);
+    Ok(())
+}
+
+/// SSQ stores note positions as whole ticks (1024 per beat), so 12th and
+/// 24th notes are rounded when a chart is written to DDR and come back
+/// as 341/1024-style beats. The SSC writer must put them back on their
+/// 12th/24th rows instead of refusing the chart. Reported against real
+/// charts whose Expert/Challenge triplet runs failed with
+/// `UnrepresentableBeat`.
+#[test]
+fn triplets_survive_ddr_round_trip() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut song = synthetic_song(None)?;
+    let expert = song
+        .charts
+        .iter_mut()
+        .find(|c| c.difficulty == Difficulty::Expert)
+        .ok_or("synthetic song has an Expert chart")?;
+    let tap = |beat: Rational| Note {
+        beat: Beat::from_rational(beat),
+        kind: NoteKind::Tap,
+        panels: PanelSet::from_bits(Style::Single, 0x04),
+    };
+    // A 12th-note run across beats 8..9 and a 24th-note run across 12..13.
+    let mut extra: Vec<Rational> = (0..3)
+        .map(|i| Rational::new(24 + i, 3))
+        .collect::<Result<_, _>>()?;
+    extra.extend(
+        (0..6)
+            .map(|i| Rational::new(72 + i, 6))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    expert.notes.extend(extra.iter().copied().map(tap));
+    expert.notes.sort_by_key(|n| n.beat);
+    // Same-beat notes merge into one SSQ step byte, so compare beats.
+    let mut expected_beats: Vec<Rational> =
+        expert.notes.iter().map(|n| n.beat.as_rational()).collect();
+    expected_beats.dedup();
+
+    let src = dir.path().join("src");
+    let (chart, audio) = write_sm5_input(&src, "trip", &song, 0.0)?;
+    let ddr = dir.path().join("ddr");
+    convert("SM5", "DDR", &chart, &audio, &ddr, &[])?;
+    let back = dir.path().join("back");
+    let logs = convert(
+        "DDR",
+        "SM5",
+        &ddr.join("trip.ssq"),
+        &ddr.join("trip.xwb"),
+        &back,
+        &[],
+    )?;
+    assert!(
+        !logs.contains("WARN"),
+        "tick rounding must not be reported as off-grid:\n{logs}"
+    );
+
+    let result = ssc::parse(&fs::read_to_string(back.join("trip.ssc"))?)?;
+    let got = result
+        .charts
+        .iter()
+        .find(|c| c.difficulty == Difficulty::Expert)
+        .ok_or("round-tripped Expert chart")?;
+    let got_beats: Vec<Rational> = got.notes.iter().map(|n| n.beat.as_rational()).collect();
+    for beat in &extra {
+        assert!(
+            got_beats.contains(beat),
+            "{beat:?} missing from round-tripped chart; got {got_beats:?}"
+        );
+    }
+    assert_eq!(got_beats, expected_beats);
     Ok(())
 }

@@ -347,6 +347,99 @@ fn full_row_shock_side(mine_bits: u8, style: Style) -> Option<ShockSide> {
 /// that divides every row offset in a measure exactly.
 const STANDARD_QUANTIZES: [u32; 10] = [4, 8, 12, 16, 24, 32, 48, 64, 96, 192];
 
+/// StepMania's note resolution: 48 rows per beat (192 per 4/4 measure).
+/// Every `#NOTES` row sits on a multiple of 1/48 beat, so this is the
+/// finest grid the writer can place a note on; every entry of
+/// `STANDARD_QUANTIZES` divides it.
+const ROWS_PER_BEAT: i64 = 48;
+
+/// A beat snapped onto the 48-rows-per-beat grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SnappedBeat {
+    /// The grid position: a rational whose denominator divides 48.
+    beat: Rational,
+    /// `beat − original`. Zero when the input was already on the grid.
+    displacement: Rational,
+}
+
+/// Move `beat` to the nearest 1/48-beat row (ties round up).
+///
+/// SSQ stores positions as whole measure ticks (1024 per beat), so a
+/// 12th or 24th note cannot be stored exactly: 1/3 beat is 341.33
+/// ticks and lands in the file as 341 or 342 depending on the authoring
+/// tool's rounding. Read back exactly, that is 341/1024 — on no
+/// StepMania grid at all. The writer therefore does what StepMania's
+/// own `BeatToNoteRow` does and rounds to the nearest row; the caller
+/// decides from `displacement` whether the move was tick rounding or a
+/// genuinely off-grid note.
+fn snap_to_row_grid(beat: Rational) -> Result<SnappedBeat, SscError> {
+    let math = |what: &str| SscError::Write(format!("{what} overflow snapping beat to rows"));
+    let num = (beat.num() as i128)
+        .checked_mul(i128::from(ROWS_PER_BEAT))
+        .ok_or_else(|| math("row count"))?;
+    let den = beat.den() as i128;
+    // Round half away from zero; beats are non-negative here but keep
+    // the negative branch honest rather than silently biasing.
+    let half = den / 2;
+    let rows = if num >= 0 {
+        (num + half) / den
+    } else {
+        (num - half) / den
+    };
+    let rows = i64::try_from(rows).map_err(|_| math("row index"))?;
+    let snapped = Rational::new(rows, ROWS_PER_BEAT).map_err(|_| math("row position"))?;
+    let displacement = snapped.sub(&beat).map_err(|_| math("displacement"))?;
+    Ok(SnappedBeat {
+        beat: snapped,
+        displacement,
+    })
+}
+
+/// Whether a snap displacement is small enough to be SSQ tick rounding:
+/// at most one measure tick (1/1024 beat). A 48th-row position rounded
+/// to a whole tick is off by under 0.67 ticks, so anything within one
+/// tick is that row; anything farther was authored off the grid.
+fn is_tick_rounding(displacement: &Rational) -> bool {
+    // |num/den| <= 1/1024  <=>  |num| * 1024 <= den
+    let scaled = (displacement.num().unsigned_abs() as u128) * (Beat::TICKS_PER_BEAT as u128);
+    scaled <= u128::from(displacement.den())
+}
+
+/// Running totals of how far `write_notes_body` had to move one chart's
+/// notes to put them on StepMania's grid, for the per-chart log line.
+#[derive(Debug, Default)]
+struct SnapStats {
+    /// Notes moved by at most one SSQ tick — expected authoring rounding.
+    tick_rounded: usize,
+    /// Notes moved farther than one SSQ tick — genuinely off-grid input.
+    off_grid: usize,
+    /// Largest |displacement| seen, in beats.
+    worst: Option<Rational>,
+}
+
+impl SnapStats {
+    fn record(&mut self, snapped: &SnappedBeat) {
+        if snapped.displacement.is_zero() {
+            return;
+        }
+        if is_tick_rounding(&snapped.displacement) {
+            self.tick_rounded += 1;
+        } else {
+            self.off_grid += 1;
+        }
+        let magnitude = if snapped.displacement.num() < 0 {
+            // A displacement never reaches `i64::MIN / den`: it is
+            // bounded by half a row (1/96 beat), so negation cannot fail.
+            snapped.displacement.neg().unwrap_or(snapped.displacement)
+        } else {
+            snapped.displacement
+        };
+        if self.worst.is_none_or(|w| magnitude > w) {
+            self.worst = Some(magnitude);
+        }
+    }
+}
+
 /// Serialize one `Chart` as a complete `#NOTEDATA` section (opening
 /// `#NOTEDATA:;` marker, per-chart tags, `#NOTES:…;` body).
 pub fn write_notedata(chart: &crate::model::Chart, out: &mut impl Write) -> Result<(), SscError> {
@@ -361,6 +454,13 @@ pub fn write_notedata(chart: &crate::model::Chart, out: &mut impl Write) -> Resu
 
 /// Write just the grid body — used by `write_notedata` above and
 /// reusable by tests that want to check the grid in isolation.
+///
+/// Note beats are snapped to StepMania's 48-rows-per-beat grid first
+/// (see `snap_to_row_grid`); each measure then uses the smallest
+/// standard quantize that holds its snapped rows exactly. Moves of at
+/// most one SSQ tick are logged at `debug`; anything larger gets one
+/// `warn` per chart, since the notes no longer play exactly where the
+/// source put them.
 pub fn write_notes_body(chart: &crate::model::Chart, out: &mut impl Write) -> Result<(), SscError> {
     let io = |e: std::io::Error| SscError::Write(e.to_string());
     let panel_count = chart.style.panel_count() as usize;
@@ -370,11 +470,12 @@ pub fn write_notes_body(chart: &crate::model::Chart, out: &mut impl Write) -> Re
     // `(measure, offset_rational, panel, char)`.
     let mut events: Vec<(usize, Rational, usize, char)> = Vec::new();
     let mut max_measure: usize = 0;
+    let mut stats = SnapStats::default();
 
     for note in &chart.notes {
-        let beat = note.beat.as_rational();
-        place_note_events(beat, note, chart.style, &mut events, &mut max_measure)?;
+        place_note_events(note, chart.style, &mut events, &mut max_measure, &mut stats)?;
     }
+    log_snap_stats(chart, &stats);
 
     // Group by measure.
     let mut per_measure: Vec<Vec<(Rational, usize, char)>> =
@@ -396,7 +497,17 @@ pub fn write_notes_body(chart: &crate::model::Chart, out: &mut impl Write) -> Re
             // Guaranteed exact by pick_quantize; assert defensively.
             debug_assert!(row_num % row_den == 0);
             let row_idx = (row_num / row_den) as usize;
-            grid[row_idx][*panel] = *ch;
+            let cell = &mut grid[row_idx][*panel];
+            if *cell != '0' {
+                log::warn!(
+                    "{:?} {:?}: measure {i} row {row_idx} panel {panel} already holds {:?}; \
+                     overwriting with {ch:?} (two notes share one row and panel)",
+                    chart.style,
+                    chart.difficulty,
+                    *cell
+                );
+            }
+            *cell = *ch;
         }
         for row in &grid {
             let line: String = row.iter().collect();
@@ -406,29 +517,78 @@ pub fn write_notes_body(chart: &crate::model::Chart, out: &mut impl Write) -> Re
     Ok(())
 }
 
-/// Expand one `Note` into 1–N `(measure, offset_within_measure, panel, char)` events.
+/// One log line per chart about grid snapping: `debug` when every move
+/// was SSQ tick rounding, `warn` when any note was authored off-grid.
+fn log_snap_stats(chart: &crate::model::Chart, stats: &SnapStats) {
+    let Some(worst) = stats.worst else {
+        return;
+    };
+    // Report the largest move in SSQ ticks — the unit the source stores.
+    let worst_ticks = worst.as_f64() * Beat::TICKS_PER_BEAT as f64;
+    if stats.off_grid > 0 {
+        log::warn!(
+            "{:?} {:?}: {} note(s) were not on any StepMania row and were moved to the nearest \
+             1/192 (largest move {worst_ticks:.1} SSQ ticks); {} more were within tick rounding",
+            chart.style,
+            chart.difficulty,
+            stats.off_grid,
+            stats.tick_rounded
+        );
+    } else {
+        log::debug!(
+            "{:?} {:?}: {} note(s) stored at whole SSQ ticks snapped to their 12th/24th/48th row \
+             (largest move {worst_ticks:.2} ticks)",
+            chart.style,
+            chart.difficulty,
+            stats.tick_rounded
+        );
+    }
+}
+
+/// Expand one `Note` into 1–N `(measure, offset_within_measure, panel, char)` events,
+/// snapping its beat (and a hold's tail beat) onto the row grid first.
 fn place_note_events(
-    beat: Rational,
     note: &Note,
     style: Style,
     events: &mut Vec<(usize, Rational, usize, char)>,
     max_measure: &mut usize,
+    stats: &mut SnapStats,
 ) -> Result<(), SscError> {
+    let head = snap_to_row_grid(note.beat.as_rational())?;
+    stats.record(&head);
     match &note.kind {
         NoteKind::Tap => {
-            let (m, off) = split_beat_into_measure(beat)?;
+            let (m, off) = split_beat_into_measure(head.beat)?;
             *max_measure = (*max_measure).max(m);
             for p in active_panels(note.panels, style) {
                 events.push((m, off, p, '1'));
             }
         }
         NoteKind::HoldHead { length } => {
-            let (mh, offh) = split_beat_into_measure(beat)?;
-            *max_measure = (*max_measure).max(mh);
-            let tail_beat = beat
+            let tail_beat = note
+                .beat
+                .as_rational()
                 .add(&length.as_rational())
                 .map_err(|_| SscError::Write("hold tail beat overflow".to_string()))?;
-            let (mt, offt) = split_beat_into_measure(tail_beat)?;
+            let tail = snap_to_row_grid(tail_beat)?;
+            stats.record(&tail);
+            let (mh, offh) = split_beat_into_measure(head.beat)?;
+            *max_measure = (*max_measure).max(mh);
+            if tail.beat <= head.beat {
+                // Shorter than half a row: `2` and `3` would land in the
+                // same cell and the tail would erase the head. A freeze
+                // that short is a tap to the player as well.
+                log::warn!(
+                    "{style:?}: hold at beat {} is shorter than 1/96 beat after snapping; \
+                     writing it as a tap",
+                    head.beat.as_f64()
+                );
+                for p in active_panels(note.panels, style) {
+                    events.push((mh, offh, p, '1'));
+                }
+                return Ok(());
+            }
+            let (mt, offt) = split_beat_into_measure(tail.beat)?;
             *max_measure = (*max_measure).max(mt);
             for p in active_panels(note.panels, style) {
                 events.push((mh, offh, p, '2'));
@@ -436,7 +596,7 @@ fn place_note_events(
             }
         }
         NoteKind::Shock { side } => {
-            let (m, off) = split_beat_into_measure(beat)?;
+            let (m, off) = split_beat_into_measure(head.beat)?;
             *max_measure = (*max_measure).max(m);
             let mine_bits = shock_side_to_bits(*side, style)?;
             for p in 0..style.panel_count() as usize {
@@ -452,7 +612,7 @@ fn place_note_events(
             // doc). Coexists with Tap/HoldHead emission on the same
             // row at different panels via the grid-assembly step in
             // `write_notes_body`.
-            let (m, off) = split_beat_into_measure(beat)?;
+            let (m, off) = split_beat_into_measure(head.beat)?;
             *max_measure = (*max_measure).max(m);
             for p in active_panels(note.panels, style) {
                 events.push((m, off, p, 'M'));
@@ -506,6 +666,10 @@ fn shock_side_to_bits(side: ShockSide, style: Style) -> Result<u8, SscError> {
 /// Pick the smallest standard quantize that represents every event in
 /// `measure_events` exactly (i.e. `offset * rows / 4` is an integer
 /// for every event).
+///
+/// `write_notes_body` snaps every event onto the 48-rows-per-beat grid
+/// before calling this, so the 192-row quantize always fits and the
+/// error below is an internal-invariant check rather than a data path.
 fn pick_quantize(
     measure_events: &[(Rational, usize, char)],
     measure_idx: usize,
@@ -513,20 +677,25 @@ fn pick_quantize(
     if measure_events.is_empty() {
         return Ok(4);
     }
-    'outer: for &rows in &STANDARD_QUANTIZES {
-        for (off, _panel, _ch) in measure_events {
-            // off / 4 * rows => off.num * rows / (off.den * 4)
-            let num = (off.num() as i128) * (rows as i128);
-            let den = (off.den() as i128) * 4;
-            if num % den != 0 {
-                continue 'outer;
-            }
+    let fits = |off: &Rational, rows: u32| {
+        // off / 4 * rows => off.num * rows / (off.den * 4)
+        let num = (off.num() as i128) * i128::from(rows);
+        let den = (off.den() as i128) * 4;
+        num % den == 0
+    };
+    for &rows in &STANDARD_QUANTIZES {
+        if measure_events.iter().all(|(off, _, _)| fits(off, rows)) {
+            return Ok(rows);
         }
-        return Ok(rows);
     }
-    // No standard quantize fits — caller has an unusual note in this
-    // measure. Surface the first offender.
-    let (off, _panel, _ch) = &measure_events[0];
+    // No standard quantize fits. Surface the event that defeats even
+    // the finest one; the sentinel `rows == 192` is the last entry of
+    // `STANDARD_QUANTIZES`, so whoever failed it fails them all.
+    let finest = STANDARD_QUANTIZES[STANDARD_QUANTIZES.len() - 1];
+    let (off, _panel, _ch) = measure_events
+        .iter()
+        .find(|(off, _, _)| !fits(off, finest))
+        .unwrap_or(&measure_events[0]);
     Err(SscError::UnrepresentableBeat {
         measure: measure_idx,
         num: off.num(),
@@ -1171,6 +1340,214 @@ mod tests {
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 12);
         assert_eq!(lines[1], "1000");
+    }
+
+    // ---------- SSQ tick rounding → StepMania row grid ----------
+    //
+    // SSQ positions are whole measure ticks (1024/beat), so 12th and
+    // 24th notes arrive as 341/1024, 682/1024, 170/1024, … instead of
+    // 1/3, 2/3, 1/6. Regression for user charts the writer used to
+    // refuse with `UnrepresentableBeat`.
+
+    fn tap_at_ticks(ticks: i64) -> Note {
+        Note {
+            beat: Beat::from_measure_ticks(ticks).unwrap(),
+            kind: NoteKind::Tap,
+            panels: PanelSet::from_bits(Style::Single, 0x01),
+        }
+    }
+
+    fn single_chart(notes: Vec<Note>) -> crate::model::Chart {
+        crate::model::Chart {
+            style: Style::Single,
+            difficulty: Difficulty::Expert,
+            notes,
+        }
+    }
+
+    #[test]
+    fn snap_leaves_grid_positions_alone() {
+        for (num, den) in [(0, 1), (1, 2), (1, 3), (5, 6), (7, 16), (47, 48), (13, 1)] {
+            let beat = Rational::new(num, den).unwrap();
+            let s = snap_to_row_grid(beat).unwrap();
+            assert_eq!(s.beat, beat, "{num}/{den} is already on the grid");
+            assert!(s.displacement.is_zero());
+        }
+    }
+
+    #[test]
+    fn snap_pulls_truncated_triplet_ticks_onto_twelfths() {
+        // floor(341.33) and floor(682.67): what the reported SSQs held.
+        let third = snap_to_row_grid(Rational::new(341, 1024).unwrap()).unwrap();
+        assert_eq!(third.beat, Rational::new(1, 3).unwrap());
+        assert!(is_tick_rounding(&third.displacement));
+
+        let two_thirds = snap_to_row_grid(Rational::new(682, 1024).unwrap()).unwrap();
+        assert_eq!(two_thirds.beat, Rational::new(2, 3).unwrap());
+        assert!(is_tick_rounding(&two_thirds.displacement));
+
+        // round(682.67) = 683 — what this tool's own SSQ writer emits.
+        let nearest = snap_to_row_grid(Rational::new(683, 1024).unwrap()).unwrap();
+        assert_eq!(nearest.beat, Rational::new(2, 3).unwrap());
+        assert!(is_tick_rounding(&nearest.displacement));
+    }
+
+    #[test]
+    fn snap_pulls_truncated_sextuplet_ticks_onto_twenty_fourths() {
+        // floor(170.67) and floor(853.33).
+        let sixth = snap_to_row_grid(Rational::new(170, 1024).unwrap()).unwrap();
+        assert_eq!(sixth.beat, Rational::new(1, 6).unwrap());
+        assert!(is_tick_rounding(&sixth.displacement));
+
+        let five_sixths = snap_to_row_grid(Rational::new(853, 1024).unwrap()).unwrap();
+        assert_eq!(five_sixths.beat, Rational::new(5, 6).unwrap());
+        assert!(is_tick_rounding(&five_sixths.displacement));
+    }
+
+    #[test]
+    fn snap_reports_genuinely_off_grid_notes() {
+        // 1/32 beat (32 ticks) is a 128th note: 10.67 ticks from either
+        // neighbouring row, far beyond tick rounding.
+        let s = snap_to_row_grid(Rational::new(32, 1024).unwrap()).unwrap();
+        assert!(!s.displacement.is_zero());
+        assert!(!is_tick_rounding(&s.displacement));
+        assert_eq!(48 % s.beat.den(), 0, "snapped onto the 48-row grid");
+    }
+
+    #[test]
+    fn tick_rounding_tolerance_is_one_tick_inclusive() {
+        assert!(is_tick_rounding(&Rational::new(1, 1024).unwrap()));
+        assert!(is_tick_rounding(&Rational::new(-1, 1024).unwrap()));
+        assert!(is_tick_rounding(&Rational::new(1, 3072).unwrap()));
+        assert!(!is_tick_rounding(&Rational::new(1, 1000).unwrap()));
+        assert!(!is_tick_rounding(&Rational::new(2, 1024).unwrap()));
+    }
+
+    #[test]
+    fn writes_truncated_triplet_run_as_twelfth_measure() {
+        // Beat 0, 1/3, 2/3, 1 stored as ticks 0, 341, 682, 1024 — the
+        // exact pattern from measure 13 of the reported `butw.ssq`.
+        let chart = single_chart(vec![
+            tap_at_ticks(0),
+            tap_at_ticks(341),
+            tap_at_ticks(682),
+            tap_at_ticks(1024),
+        ]);
+        let body = write_body_string(&chart);
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 12, "a 12th-note measure, not a failure");
+        assert_eq!(lines[0], "1000");
+        assert_eq!(lines[1], "1000");
+        assert_eq!(lines[2], "1000");
+        assert_eq!(lines[3], "1000");
+        assert!(lines[4..].iter().all(|l| *l == "0000"));
+    }
+
+    #[test]
+    fn writes_truncated_sextuplets_beside_eighths_as_24th_measure() {
+        // Measure 30 of the reported `foot_4.ssq` Double Expert chart:
+        // 123, 123+1/6, 123+1/3, 123+1/2, 123+2/3, 123+5/6 as ticks.
+        let base = 123 * 1024;
+        let chart = single_chart(
+            [0, 170, 341, 512, 682, 853]
+                .iter()
+                .map(|t| tap_at_ticks(base + t))
+                .collect(),
+        );
+        let body = write_body_string(&chart);
+        let measures: Vec<&str> = body.split(",\n").collect();
+        let last: Vec<&str> = measures[30].lines().collect();
+        assert_eq!(last.len(), 24);
+        // Beat 123 is beat 3 of measure 30 → rows 18..24 of 24.
+        for (i, line) in last.iter().enumerate() {
+            let expected = if i >= 18 { "1000" } else { "0000" };
+            assert_eq!(*line, expected, "row {i}");
+        }
+    }
+
+    #[test]
+    fn hold_tail_snaps_with_its_head() {
+        // Head on beat 0, length "1/3 beat" stored as 341 ticks.
+        let chart = single_chart(vec![Note {
+            beat: Beat::zero(),
+            kind: NoteKind::HoldHead {
+                length: Beat::from_measure_ticks(341).unwrap(),
+            },
+            panels: PanelSet::from_bits(Style::Single, 0x01),
+        }]);
+        let body = write_body_string(&chart);
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], "2000");
+        assert_eq!(lines[1], "3000");
+    }
+
+    #[test]
+    fn hold_shorter_than_half_a_row_becomes_a_tap() {
+        // A 1-tick freeze would put `2` and `3` in the same cell.
+        let chart = single_chart(vec![Note {
+            beat: Beat::zero(),
+            kind: NoteKind::HoldHead {
+                length: Beat::from_measure_ticks(1).unwrap(),
+            },
+            panels: PanelSet::from_bits(Style::Single, 0x01),
+        }]);
+        let body = write_body_string(&chart);
+        assert_eq!(body, "1000\n0000\n0000\n0000\n");
+        // And the result must read back cleanly.
+        let notes = parse_notes_body(&body, Style::Single).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].kind, NoteKind::Tap);
+    }
+
+    #[test]
+    fn note_just_before_a_measure_boundary_rounds_into_the_next_measure() {
+        // Beat 4 − 1/1024 is nearer row 0 of measure 1 than row 191 of
+        // measure 0; snapping before the measure split keeps it there.
+        let chart = single_chart(vec![tap_at_ticks(4 * 1024 - 1)]);
+        let body = write_body_string(&chart);
+        assert_eq!(body, "0000\n0000\n0000\n0000\n,\n1000\n0000\n0000\n0000\n");
+    }
+
+    #[test]
+    fn snapped_triplets_round_trip_through_the_parser() {
+        let chart = single_chart(vec![
+            tap_at_ticks(0),
+            tap_at_ticks(341),
+            tap_at_ticks(683),
+            tap_at_ticks(2048 + 170),
+            tap_at_ticks(2048 + 853),
+        ]);
+        let body = write_body_string(&chart);
+        let notes = parse_notes_body(&body, Style::Single).unwrap();
+        let beats: Vec<Rational> = notes.iter().map(|n| n.beat.as_rational()).collect();
+        assert_eq!(
+            beats,
+            vec![
+                Rational::zero(),
+                Rational::new(1, 3).unwrap(),
+                Rational::new(2, 3).unwrap(),
+                Rational::new(13, 6).unwrap(),
+                Rational::new(17, 6).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn pick_quantize_names_the_actual_offender() {
+        // First event is fine; the second is the one no grid can hold.
+        let events = vec![
+            (Rational::zero(), 0usize, '1'),
+            (Rational::new(1, 1024).unwrap(), 1usize, '1'),
+        ];
+        let err = pick_quantize(&events, 7).unwrap_err();
+        match err {
+            SscError::UnrepresentableBeat { measure, num, den } => {
+                assert_eq!(measure, 7);
+                assert_eq!((num, den), (1, 1024));
+            }
+            other => panic!("expected UnrepresentableBeat, got {other:?}"),
+        }
     }
 
     // ---------- parse → write → parse round-trip ----------
