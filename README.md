@@ -63,6 +63,7 @@ Batch output defaults to `<input-folder>/output/`. Use `--output-dir` to overrid
 | `--auto-sync [MODE]` | Measure how far the chart is from its audio and correct it (`apply`, the default), or only log the correction (`report`) — see "Auto-sync" below |
 | `--auto-sync-max-ms N` | Largest correction `--auto-sync` may apply, in ms (default 60, max 200) |
 | `--song-code CODE` | DDR song code for a single-file `--to-format DDR` conversion; names the output files and the audio bank (see "Song codes" below) |
+| `--suffix SUFFIX` | Appended to song codes the tool has to derive (`--to-format DDR`, batch or single-file); valid basenames are left as-is (see "Song codes" below) |
 | `-v` / `-vv` | Increase log verbosity (debug / trace) |
 | `-q` / `--quiet` | Suppress info-level output (keeps warn and error) |
 | `--version` | Print version |
@@ -114,7 +115,18 @@ The tool therefore uses one name for both: the output basename **is** the code w
 - **Batch mode**: the input basename is the code. Name each pair `{code}.ssc` (or `.sm`) + `{code}.ogg` before converting, e.g. `muka.ssc` + `muka.ogg` → `muka.ssq/.xwb/.xsb` with cue `muka`.
 - **Single-file mode**: pass `--song-code muka`. The outputs are then named `muka.*` regardless of the input filename, ready to install.
 
-Codes must be 1–16 ASCII letters or digits. If an input basename cannot be a code (spaces, punctuation, too long — e.g. `A Is For Action.ssc`), the files are still written under that basename so the chart can be inspected, but the bank gets a best-effort short code and a warning explains that the audio will not play until the song is renamed. Renaming the *outputs* after the fact does **not** fix this: the code is inside the `.xwb` and `.xsb`, so re-run the conversion with the right name.
+Codes must be 1–16 lowercase ASCII letters, digits or underscores (e.g. `muka`, `bknh2`, `sign_h`). A basename that already follows that rule is used as-is — `sign_h.ssq` + `sign_h.wav` → `sign_h.ssq/.xwb/.xsb` with cue `sign_h`.
+
+If an input basename cannot be a code (capitals, spaces, punctuation, too long — e.g. `A Is For Action.ssc`), the tool **derives** one: the first 4 letters, digits or underscores, lowercased (`aisf`), or `song` if there are none. The derived code names the output files as well as the bank and cues, so the result is installable as written; a warning reports the new name. `--suffix` is appended to derived codes only:
+
+```bash
+# "A Is For Action.ssc" -> aisf_h.ssq/.xwb/.xsb; "sign_h.ssc" stays sign_h.*
+ddr-chart-tools --from-format SM5 --to-format DDR --input-folder ./pack --suffix _h
+```
+
+The suffix must be 1–12 lowercase ASCII letters, digits or underscores, so a derived code never exceeds 16 characters. If two inputs would end up with the same name (e.g. `Sign Here.ssc` and `Sign There.ssc` both derive `sign_h`, or derive the name of an input that is already valid), the run fails before converting anything and lists the clashing inputs; rename them and re-run. The check ignores case, because `Muka` and `muka` are the same file on Windows and macOS.
+
+Renaming the *outputs* after the fact does **not** change the song code: it is inside the `.xwb` and `.xsb`, so re-run the conversion with the right name. For the same reason, a legacy XWB is only byte-copied when its internal bank name already equals the output code; otherwise it is re-encoded under the new name.
 
 ### SM5 → DDR audio requirements
 
@@ -149,7 +161,7 @@ ddr-se-bank generate --input clap.ogg --name asti --out-dir ./banks
 
 `--name` is the wave bank's internal name, both of the sound bank's name fields, the entry's name
 **and** the cue's name. The engine matches banks by name and resolves cues with a byte-exact
-`strcmp`, so its case is significant. It must be 1–16 ASCII alphanumeric characters.
+`strcmp`, so its case is significant. It must be 1–16 ASCII letters, digits or underscores.
 
 The input **must already decode to mono 44100 Hz** (Ogg Vorbis). It is deliberately neither
 resampled nor downmixed: doing that silently would hide a mistake upstream, and doing it with an

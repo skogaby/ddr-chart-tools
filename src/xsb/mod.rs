@@ -97,7 +97,7 @@ const NO_OFFSET: i32 = -1;
 /// Maximum supported song-code length. The name fields are 64 bytes so the
 /// hard limit is 63, but the DDR audio-file naming convention caps codes at
 /// ~5 characters in practice. We accept up to 16 defensively.
-const MAX_CODE_LEN: usize = 16;
+pub const MAX_CODE_LEN: usize = 16;
 
 /// Byte offset of the CRC field in the header.
 const CRC_OFFSET: usize = 0x08;
@@ -110,7 +110,7 @@ const CRC_DATA_START: usize = 0x12;
 
 #[derive(Debug, Error)]
 pub enum XsbError {
-    #[error("song code must be 1-{max} ASCII alphanumeric characters, got {code:?}", max = MAX_CODE_LEN)]
+    #[error("song code must be 1-{max} ASCII letters, digits or underscores, got {code:?}", max = MAX_CODE_LEN)]
     BadCode { code: String },
 
     #[error("write error: {0}")]
@@ -123,7 +123,8 @@ pub enum XsbError {
 
 /// Write a complete XSB sound bank for the given song `code` (song profile).
 ///
-/// `code` must be 1 to 16 ASCII alphanumeric characters. It is written into
+/// `code` must be 1 to 16 ASCII letters, digits or `_`; see
+/// [`is_valid_song_code`] for the stricter rule real song IDs follow. It is written into
 /// the soundbank name, wavebank name, and as the main cue name; the preview
 /// cue is named `{code}_s`.
 ///
@@ -139,7 +140,7 @@ pub fn write(code: &str, out: &mut impl Write) -> Result<(), XsbError> {
 
 /// Write a complete XSB sound bank holding a single sound effect (SE profile).
 ///
-/// `name` must be 1 to 16 ASCII alphanumeric characters and is written into
+/// `name` must be 1 to 16 ASCII letters, digits or `_` and is written into
 /// the soundbank name, the wavebank name, and as the one cue's name. The
 /// engine matches a sound bank to its wave bank by name and resolves cues with
 /// a byte-exact `strcmp`, so the companion XWB's internal bank name must be
@@ -556,21 +557,33 @@ const CRC_TABLE: [u16; 256] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Whether `code` can name a wave bank and its cues: 1 to
-/// [`MAX_CODE_LEN`] ASCII alphanumeric bytes. This is the same check
-/// [`write`] and [`write_se`] apply, exposed so callers can validate (or
-/// derive) a code before any file is produced.
+/// Whether `code` is a valid DDR World **song** code: 1 to
+/// [`MAX_CODE_LEN`] bytes, each a lowercase ASCII letter, digit, or `_`
+/// (e.g. `muka`, `bknh2`, `sign_h`).
+///
+/// This is the naming rule for song IDs — the basename the game loads a
+/// song's `.ssq`/`.xwb`/`.xsb` by, and so also the cue name. It is
+/// stricter than what [`write`] accepts (which also allows uppercase, for
+/// sound-effect banks), and is what callers use to decide whether an input
+/// basename can be used as a code as-is.
 #[must_use]
-pub fn is_valid_code(code: &str) -> bool {
+pub fn is_valid_song_code(code: &str) -> bool {
     validate_code(code).is_ok()
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// Whether `b` may appear in a bank or cue name: an ASCII letter, digit,
+/// or `_`. The preview cue's own `_s` suffix shows the engine handles
+/// underscores in cue names.
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 fn validate_code(code: &str) -> Result<&[u8], XsbError> {
     let bytes = code.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > MAX_CODE_LEN
-        || !bytes.iter().all(|b| b.is_ascii_alphanumeric())
-    {
+    if bytes.is_empty() || bytes.len() > MAX_CODE_LEN || !bytes.iter().copied().all(is_name_byte) {
         return Err(XsbError::BadCode {
             code: code.to_string(),
         });
@@ -1124,5 +1137,41 @@ mod tests {
     fn accepts_boundary_lengths() {
         assert!(write(&"a".repeat(MAX_CODE_LEN), &mut Vec::new()).is_ok());
         assert!(write("a", &mut Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn accepts_underscores_in_code() {
+        // DDR World song IDs such as `sign_h` contain underscores.
+        let mut out = Vec::new();
+        write("sign_h", &mut out).unwrap();
+        let blob = b"sign_h_s\0sign_h\0";
+        assert_eq!(&out[out.len() - blob.len()..], blob);
+    }
+
+    #[test]
+    fn song_code_rule_is_lowercase_digits_and_underscores() {
+        for good in [
+            "muka",
+            "bknh2",
+            "sign_h",
+            "_",
+            "a",
+            &"a".repeat(MAX_CODE_LEN),
+        ] {
+            assert!(is_valid_song_code(good), "expected valid: {good:?}");
+        }
+        let long = "a".repeat(MAX_CODE_LEN + 1);
+        for bad in [
+            "",
+            "Muka",
+            "SIGN_H",
+            "mu ka",
+            "mu-ka",
+            "muka!",
+            "\u{e9}t\u{e9}",
+            &long,
+        ] {
+            assert!(!is_valid_song_code(bad), "expected invalid: {bad:?}");
+        }
     }
 }

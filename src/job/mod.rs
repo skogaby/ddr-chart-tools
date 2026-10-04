@@ -196,6 +196,7 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
 
     ssq_legacy::modernize::modernize(&mut result);
 
+    let code = resolve_song_code(job);
     let ssq_path = output_path(job, "ssq");
     let xwb_path = output_path(job, "xwb");
     let xsb_path = output_path(job, "xsb");
@@ -244,7 +245,7 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     info!("wrote {}", ssq_path.display());
 
     // Audio: try passthrough, else decode + re-encode.
-    if try_audio_passthrough(&audio_bytes, &job.audio_in, &xwb_path, &xsb_path)? {
+    if try_audio_passthrough(&audio_bytes, &job.audio_in, &code, &xwb_path, &xsb_path)? {
         info!("audio passthrough (XWB+XSB byte-copied)");
     } else {
         let audio = match decoded_audio {
@@ -252,7 +253,6 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
             None => decode_legacy_audio(&audio_bytes)?,
         };
         result.song.audio = audio;
-        let code = resolve_song_code(job);
         write_ddr_audio(
             &result.song.audio,
             &result.song.preview,
@@ -333,16 +333,56 @@ fn output_path(job: &Job, ext: &str) -> PathBuf {
     job.output_dir.join(format!("{}.{ext}", output_stem(job)))
 }
 
-/// Basename shared by every file a job writes: the explicit `--song-code`
-/// when given, else the input chart's stem. For Ultramix inputs the
-/// `_all` suffix is stripped (`abs2_all.ssq` → `abs2.ssc`) so output
-/// filenames match the canonical per-song ID the game uses to find
-/// assets.
-fn output_stem(job: &Job) -> String {
-    match &job.song_code {
-        Some(code) => code.clone(),
-        None => input_stem(&job.chart_in).to_string(),
+/// Basename shared by every file a job writes. Pure; the planner calls it
+/// to detect two inputs that would write the same files.
+///
+/// - `--song-code`, when given, is used verbatim.
+/// - Otherwise the input chart's stem, with any Ultramix `_all` suffix
+///   stripped (`abs2_all.ssq` → `abs2.ssc`) so output filenames match the
+///   canonical per-song ID the game uses to find assets.
+/// - For `DDR` output only, a stem that is not a valid song code is
+///   replaced by a derived one plus the job's suffix — see
+///   [`derive_song_code`]. The basename *is* the song code (business
+///   rule 11), so this is what makes the output installable as written.
+#[must_use]
+pub fn output_stem(job: &Job) -> String {
+    if let Some(code) = &job.song_code {
+        return code.clone();
     }
+    let stem = input_stem(&job.chart_in);
+    if job.to != Format::Ddr || xsb::is_valid_song_code(stem) {
+        return stem.to_string();
+    }
+    derive_song_code(stem, job.suffix.as_deref())
+}
+
+/// Best-effort song code for a basename that is not a valid code: its
+/// first [`SONG_CODE_FALLBACK_LEN`] letters, digits and underscores,
+/// lowercased (`song` if it has none), followed by `suffix`.
+fn derive_song_code(stem: &str, suffix: Option<&str>) -> String {
+    let mut code: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .map(|c| c.to_ascii_lowercase())
+        .take(SONG_CODE_FALLBACK_LEN)
+        .collect();
+    if code.is_empty() {
+        code.push_str("song");
+    }
+    code.push_str(suffix.unwrap_or(""));
+    code
+}
+
+/// Longest `--suffix` accepted: whatever keeps the longest derived code
+/// within the XSB name limit.
+pub const MAX_SUFFIX_LEN: usize = xsb::MAX_CODE_LEN - SONG_CODE_FALLBACK_LEN;
+
+/// Whether `suffix` can be appended to a derived song code and still give
+/// a valid one: 1 to [`MAX_SUFFIX_LEN`] lowercase ASCII letters, digits or
+/// underscores.
+#[must_use]
+pub fn is_valid_suffix(suffix: &str) -> bool {
+    suffix.len() <= MAX_SUFFIX_LEN && xsb::is_valid_song_code(suffix)
 }
 
 /// The input chart's file stem with any Ultramix `_all` suffix removed.
@@ -411,34 +451,27 @@ fn apply_ultramix_sif_if_present(chart_path: &Path, song: &mut crate::model::Son
 /// song's ID, compared byte-for-byte (case included). The bank therefore
 /// only produces sound when this code equals the ID the files are
 /// installed under — which is also their basename. So the code *is* the
-/// output basename: `--song-code` when given, else the input stem.
+/// output basename ([`output_stem`]).
 ///
-/// When the stem cannot be a code (spaces, punctuation, more than 16
-/// characters) the bank is still written, with a best-effort code, so
-/// the chart can be inspected — but the audio will be silent in-game
-/// and the user is told what to rename.
+/// A stem that is already a valid song code (lowercase letters, digits
+/// and underscores, 1–16 characters — see [`xsb::is_valid_song_code`]) is
+/// used unchanged, so `sign_h.ssq` names its bank `sign_h`. Otherwise
+/// (capitals, spaces, punctuation, too long) the outputs are named after
+/// a derived code plus `--suffix`, and the user is told the new name.
 fn resolve_song_code(job: &Job) -> String {
-    let stem = output_stem(job);
-    if xsb::is_valid_code(&stem) {
-        return stem;
+    let code = output_stem(job);
+    if job.song_code.is_none() {
+        let stem = input_stem(&job.chart_in);
+        if stem != code {
+            warn!(
+                "{}: basename {stem:?} is not a valid DDR song code (1-16 lowercase ASCII \
+                 letters, digits or underscores); writing it as {code}.ssq/.xwb/.xsb. Install \
+                 it under that ID, or rename the input pair (or pass --song-code <ID> in \
+                 single-file mode) to choose another.",
+                job.chart_in.display(),
+            );
+        }
     }
-    let fallback: String = stem
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(SONG_CODE_FALLBACK_LEN)
-        .collect();
-    let code = if fallback.is_empty() {
-        "song".to_string()
-    } else {
-        fallback
-    };
-    warn!(
-        "{}: basename {stem:?} cannot name a DDR wave bank (need 1-16 ASCII letters/digits); \
-         audio was written under code {code:?} and the game will NOT play it unless the song \
-         is installed as {code}.ssq/.xwb/.xsb. Name the input pair after the song's ID, or \
-         pass --song-code <ID> in single-file mode.",
-        job.chart_in.display(),
-    );
     code
 }
 
@@ -601,6 +634,7 @@ fn build_xwb_bank(code: &str, fmt: &WaveFormat, main_data: &[u8], preview_data: 
 fn try_audio_passthrough(
     audio_bytes: &[u8],
     audio_path: &Path,
+    code: &str,
     xwb_out: &Path,
     xsb_out: &Path,
 ) -> Result<bool, Error> {
@@ -614,6 +648,19 @@ fn try_audio_passthrough(
         Ok(b) => b,
         Err(_) => return Ok(false),
     };
+
+    // The bank's internal name must already be the song code: the cues
+    // inside the sibling XSB are named after it, and the game only plays
+    // them when that name equals the installed basename. A source named
+    // anything else (e.g. renamed by `--song-code` or a derived code) is
+    // re-encoded under the right name instead.
+    if bank.name_str() != code {
+        info!(
+            "audio passthrough skipped: source bank is named {:?}, song code is {code:?}",
+            bank.name_str()
+        );
+        return Ok(false);
+    }
 
     // Must have exactly 2 entries.
     if bank.entries.len() != 2 {
@@ -958,6 +1005,7 @@ mod tests {
             output_dir: output_dir.clone(),
             sync_offset_ms,
             song_code: None,
+            suffix: None,
             auto_sync: None,
         };
         run_one(&job)?;
@@ -1056,7 +1104,15 @@ mod tests {
             output_dir: PathBuf::from("out"),
             sync_offset_ms: 0,
             song_code: song_code.map(str::to_string),
+            suffix: None,
             auto_sync: None,
+        }
+    }
+
+    fn job_with_suffix(chart: &str, suffix: &str) -> Job {
+        Job {
+            suffix: Some(suffix.to_string()),
+            ..job_for(chart, None)
         }
     }
 
@@ -1067,8 +1123,18 @@ mod tests {
         // 4-character truncation silently broke every 5-character ID.
         assert_eq!(resolve_song_code(&job_for("muka.ssc", None)), "muka");
         assert_eq!(resolve_song_code(&job_for("bknh2.ssq", None)), "bknh2");
-        assert_eq!(resolve_song_code(&job_for("Muka.ssc", None)), "Muka");
         assert_eq!(resolve_song_code(&job_for("abs2_all.ssq", None)), "abs2");
+        // Underscores are part of real IDs; they must not trigger the
+        // 4-character fallback.
+        assert_eq!(resolve_song_code(&job_for("sign_h.ssq", None)), "sign_h");
+        assert_eq!(
+            resolve_song_code(&job_for("ab_cd_ef_gh.ssc", None)),
+            "ab_cd_ef_gh"
+        );
+        assert_eq!(
+            output_path(&job_for("sign_h.ssq", None), "xwb"),
+            PathBuf::from("out/sign_h.xwb")
+        );
     }
 
     #[test]
@@ -1081,27 +1147,89 @@ mod tests {
 
     #[test]
     fn unusable_basename_falls_back_to_a_short_code() {
-        // Still produces *something* (so the SSQ can be inspected) but
-        // the caller logs that it will not play under this filename.
+        // The caller logs the new name; the files are written under it so
+        // they are installable as-is.
         assert_eq!(
             resolve_song_code(&job_for("A Is For Action.ssc", None)),
-            "AIsF"
+            "aisf"
         );
+        // Capitals make a basename invalid; the fallback is lowercased so
+        // it is at least a valid code.
+        assert_eq!(resolve_song_code(&job_for("Muka.ssc", None)), "muka");
+        assert_eq!(resolve_song_code(&job_for("Sign_H.ssq", None)), "sign");
         assert_eq!(resolve_song_code(&job_for("$1.78.ssc", None)), "178");
         assert_eq!(resolve_song_code(&job_for("!!!.ssc", None)), "song");
         assert_eq!(
             output_path(&job_for("A Is For Action.ssc", None), "ssq"),
-            PathBuf::from("out/A Is For Action.ssq"),
-            "output filename still follows the input when no code is given"
+            PathBuf::from("out/aisf.ssq"),
+            "the derived code names the files too (business rule 11)"
+        );
+    }
+
+    #[test]
+    fn suffix_is_appended_only_to_derived_codes() {
+        let job = job_with_suffix("A Is For Action.ssc", "_h");
+        assert_eq!(resolve_song_code(&job), "aisf_h");
+        assert_eq!(output_path(&job, "xwb"), PathBuf::from("out/aisf_h.xwb"));
+        assert_eq!(output_path(&job, "xsb"), PathBuf::from("out/aisf_h.xsb"));
+        assert_eq!(
+            resolve_song_code(&job_with_suffix("Sign Here.ssq", "_h")),
+            "sign_h"
+        );
+        assert_eq!(
+            resolve_song_code(&job_with_suffix("!!!.ssc", "_h")),
+            "song_h"
+        );
+        // Already-valid basenames are used verbatim, never suffixed.
+        assert_eq!(
+            resolve_song_code(&job_with_suffix("muka.ssc", "_h")),
+            "muka"
+        );
+        assert_eq!(
+            resolve_song_code(&job_with_suffix("sign_h.ssq", "_h")),
+            "sign_h"
+        );
+        // Neither is an explicit --song-code.
+        let job = Job {
+            song_code: Some("muka".to_string()),
+            ..job_with_suffix("Mukade.ssc", "_h")
+        };
+        assert_eq!(resolve_song_code(&job), "muka");
+    }
+
+    #[test]
+    fn longest_suffix_still_gives_a_valid_code() {
+        let suffix = "_".repeat(MAX_SUFFIX_LEN);
+        assert!(is_valid_suffix(&suffix));
+        let code = resolve_song_code(&job_with_suffix("Long Name.ssc", &suffix));
+        assert!(xsb::is_valid_song_code(&code), "{code:?}");
+        for bad in ["", "_H", "-h", " h", &"_".repeat(MAX_SUFFIX_LEN + 1)] {
+            assert!(!is_valid_suffix(bad), "expected invalid: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn sm5_output_keeps_the_input_name() {
+        // Codes only exist on the DDR side; SSC/OGG names follow the input.
+        let job = Job {
+            from: Format::Ddr,
+            to: Format::Sm5,
+            ..job_with_suffix("A Is For Action.ssq", "_h")
+        };
+        assert_eq!(
+            output_path(&job, "ssc"),
+            PathBuf::from("out/A Is For Action.ssc")
         );
     }
 
     #[test]
     fn output_stem_keeps_dots_that_are_not_the_extension() {
-        assert_eq!(
-            output_path(&job_for("$1.78.ssc", None), "ssq"),
-            PathBuf::from("out/$1.78.ssq")
-        );
+        let job = Job {
+            from: Format::Ddr,
+            to: Format::Sm5,
+            ..job_for("$1.78.ssq", None)
+        };
+        assert_eq!(output_path(&job, "ssc"), PathBuf::from("out/$1.78.ssc"));
     }
 
     // ---------- validate_ddr_audio ----------

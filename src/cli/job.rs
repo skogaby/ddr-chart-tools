@@ -70,10 +70,15 @@ pub struct Job {
     /// `#OFFSET` (SSC output).
     pub sync_offset_ms: i32,
     /// Explicit DDR song code (`--song-code`). When set it names the
-    /// output files and the XACT wave bank / cues; otherwise the code is
-    /// derived from the chart's basename. Only meaningful for `DDR`
-    /// output.
+    /// output files and the XACT wave bank / cues; otherwise the chart's
+    /// basename is used when it is a valid code, and a code is derived
+    /// from it when not. Only meaningful for `DDR` output.
     pub song_code: Option<String>,
+    /// Appended to a song code the tool has to *derive* because the
+    /// chart's basename is not a valid code (`--suffix`). Never applied
+    /// to `song_code` or to a basename that is already valid. Only
+    /// meaningful for `DDR` output.
+    pub suffix: Option<String>,
     /// Measure and correct the chart's sync against its audio
     /// (`--auto-sync`). `None` unless the flag was given.
     pub auto_sync: Option<AutoSync>,

@@ -166,3 +166,54 @@ fn undecodable_passthrough_audio_skips_auto_sync() -> TestResult {
     assert_eq!(fs::read(synced.join("sync.xwb"))?, corrupted);
     Ok(())
 }
+
+#[test]
+fn suffix_names_files_and_bank_of_a_derived_code() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let input = dir.path().join("in");
+    let (chart, audio) = write_legacy_wavm_input(&input, "sign", &synthetic_song(None)?, 0.0)?;
+    // A basename that is not a valid song code (capital, space).
+    let chart_named = input.join("Sign Here.ssq");
+    let audio_named = input.join("Sign Here.wavm");
+    fs::rename(&chart, &chart_named)?;
+    fs::rename(&audio, &audio_named)?;
+
+    let out = dir.path().join("out");
+    let logs = convert(
+        "DDR_LEGACY",
+        "DDR",
+        &chart_named,
+        &audio_named,
+        &out,
+        &["--suffix", "_h"],
+    )?;
+    assert!(logs.contains("writing it as sign_h"), "{logs}");
+    for ext in ["ssq", "xwb", "xsb"] {
+        assert!(out.join(format!("sign_h.{ext}")).is_file(), "sign_h.{ext}");
+    }
+    let bank = xwb::parse(&fs::read(out.join("sign_h.xwb"))?)?;
+    assert_eq!(bank.name_str(), "sign_h", "bank named after the files");
+    Ok(())
+}
+
+#[test]
+fn passthrough_is_skipped_when_the_song_code_changes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let input = dir.path().join("in");
+    let (chart, bank, _) = write_legacy_xwb_input(&input, "sync", &synthetic_song(None)?, 0.0)?;
+    let out = dir.path().join("out");
+    let logs = convert(
+        "DDR_LEGACY",
+        "DDR",
+        &chart,
+        &bank,
+        &out,
+        &["--song-code", "sync_h"],
+    )?;
+    // A byte-copied bank would still be named `sync`, so the game would
+    // never find the `sync_h` cue.
+    assert!(!logs.contains("audio passthrough (XWB+XSB"), "{logs}");
+    let written = xwb::parse(&fs::read(out.join("sync_h.xwb"))?)?;
+    assert_eq!(written.name_str(), "sync_h");
+    Ok(())
+}

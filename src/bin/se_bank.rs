@@ -47,8 +47,8 @@ enum Command {
         #[arg(long)]
         input: PathBuf,
 
-        /// Bank name, and the name of the single cue. 1-16 ASCII alphanumeric
-        /// characters. Case is significant to the engine.
+        /// Bank name, and the name of the single cue. 1-16 ASCII letters,
+        /// digits or underscores. Case is significant to the engine.
         #[arg(long)]
         name: String,
 

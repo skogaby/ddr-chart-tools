@@ -35,8 +35,27 @@ pub enum CliError {
     )]
     SongCodeRequiresSingleFile,
 
-    #[error("--song-code must be 1-16 ASCII letters or digits, got {code:?}")]
+    #[error(
+        "--song-code must be 1-16 lowercase ASCII letters, digits or underscores, got {code:?}"
+    )]
     BadSongCode { code: String },
+
+    #[error("--suffix only applies to --to-format DDR (it is appended to derived song codes)")]
+    SuffixRequiresDdrOutput,
+
+    #[error(
+        "--suffix must be 1-{max} lowercase ASCII letters, digits or underscores, got {suffix:?}",
+        max = crate::job::MAX_SUFFIX_LEN
+    )]
+    BadSuffix { suffix: String },
+
+    #[error(
+        "{} inputs would all be written as {name}.*: {inputs}; rename them (or change --suffix) \
+         so each gets its own song code",
+        paths.len(),
+        inputs = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+    )]
+    OutputNameCollision { name: String, paths: Vec<PathBuf> },
 
     #[error("--auto-sync-max-ms only applies together with --auto-sync")]
     AutoSyncMaxRequiresAutoSync,
@@ -104,11 +123,20 @@ pub struct Cli {
     /// output `.ssq`/`.xwb`/`.xsb` and the wave bank and cues inside
     /// them. The game plays the cue whose name equals the song's code,
     /// compared byte-for-byte, so this must match the ID the song is
-    /// installed under. 1–16 ASCII letters/digits. Single-file mode with
+    /// installed under. 1–16 lowercase ASCII letters, digits or `_`
+    /// (e.g. `sign_h`). Single-file mode with
     /// `--to-format DDR` only; in batch mode name each input pair after
     /// its code instead.
     #[arg(long)]
     pub song_code: Option<String>,
+
+    /// Appended to the song code of any input whose basename is not
+    /// already a valid one, e.g. `--suffix _h` turns `Sign Here.ssc` into
+    /// `sign_h.ssq/.xwb/.xsb` instead of `sign.*`. Inputs that are already
+    /// valid codes (`sign_h.ssq`) keep their name unchanged. 1–12
+    /// lowercase ASCII letters, digits or `_`. `--to-format DDR` only.
+    #[arg(long)]
+    pub suffix: Option<String>,
 
     /// Measure how far the chart is from its audio and move the chart to
     /// match (`apply`, the default when the flag is given alone), or only
@@ -181,8 +209,19 @@ impl Cli {
             if self.to_format != Format::Ddr {
                 return Err(CliError::SongCodeRequiresDdrOutput);
             }
-            if !crate::xsb::is_valid_code(code) {
+            if !crate::xsb::is_valid_song_code(code) {
                 return Err(CliError::BadSongCode { code: code.clone() });
+            }
+        }
+
+        if let Some(suffix) = &self.suffix {
+            if self.to_format != Format::Ddr {
+                return Err(CliError::SuffixRequiresDdrOutput);
+            }
+            if !crate::job::is_valid_suffix(suffix) {
+                return Err(CliError::BadSuffix {
+                    suffix: suffix.clone(),
+                });
             }
         }
 
@@ -218,6 +257,7 @@ impl Cli {
                     output_dir,
                     sync_offset_ms,
                     song_code: self.song_code,
+                    suffix: self.suffix,
                     auto_sync,
                 }],
                 pairing: None,
@@ -242,7 +282,7 @@ impl Cli {
             return Err(CliError::NoPairs { dir: dir.clone() });
         }
 
-        let jobs = result
+        let jobs: Vec<Job> = result
             .pairs
             .iter()
             .map(|(chart, audio)| Job {
@@ -254,14 +294,40 @@ impl Cli {
                 output_dir: output_dir.clone(),
                 sync_offset_ms,
                 song_code: None,
+                suffix: self.suffix.clone(),
                 auto_sync,
             })
             .collect();
+        check_output_names(&jobs)?;
 
         Ok(Plan {
             jobs,
             pairing: Some(result),
         })
+    }
+}
+
+/// Fail if two jobs would write the same output files. Deriving song
+/// codes can map distinct inputs onto one name (`Sign Here.ssc` and
+/// `Sign There.ssc` are both `sign` + suffix), and the second job would
+/// then fail with "already exists" — or, with `--overwrite`, silently
+/// replace the first. Caught here, before anything is converted.
+///
+/// Names are compared case-insensitively: on the case-insensitive
+/// filesystems Windows and macOS default to, `Muka.ssc` and `muka.ssc`
+/// write the same files.
+fn check_output_names(jobs: &[Job]) -> Result<(), CliError> {
+    let mut by_name: std::collections::BTreeMap<String, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for job in jobs {
+        by_name
+            .entry(crate::job::output_stem(job).to_ascii_lowercase())
+            .or_default()
+            .push(job.chart_in.clone());
+    }
+    match by_name.into_iter().find(|(_, paths)| paths.len() > 1) {
+        Some((name, paths)) => Err(CliError::OutputNameCollision { name, paths }),
+        None => Ok(()),
     }
 }
 
@@ -470,6 +536,24 @@ mod tests {
     }
 
     #[test]
+    fn song_code_may_contain_underscores() {
+        let c = cli(&[
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "x.ssc",
+            "--audiofile",
+            "x.ogg",
+            "--song-code",
+            "sign_h",
+        ])
+        .unwrap();
+        c.validate().unwrap();
+    }
+
+    #[test]
     fn song_code_rejected_for_sm5_output() {
         let c = cli(&[
             "--from-format",
@@ -492,7 +576,7 @@ mod tests {
 
     #[test]
     fn song_code_must_be_a_valid_cue_name() {
-        for bad in ["", "mu ka", "muka!", "abcdefghijklmnopq"] {
+        for bad in ["", "mu ka", "muka!", "Muka", "abcdefghijklmnopq"] {
             let c = cli(&[
                 "--from-format",
                 "SM5",
@@ -673,5 +757,127 @@ mod tests {
             c.validate(),
             Err(CliError::SongCodeRequiresSingleFile)
         ));
+    }
+
+    /// A batch directory holding one empty `.ssc` + `.ogg` pair per stem.
+    fn sm5_batch_dir(stems: &[&str]) -> Result<tempfile::TempDir, std::io::Error> {
+        let dir = tempfile::tempdir()?;
+        for stem in stems {
+            std::fs::write(dir.path().join(format!("{stem}.ssc")), b"")?;
+            std::fs::write(dir.path().join(format!("{stem}.ogg")), b"")?;
+        }
+        Ok(dir)
+    }
+
+    fn batch_to_ddr(dir: &std::path::Path, extra: &[&str]) -> Result<Cli, clap::Error> {
+        let dir = dir.to_str().unwrap_or_default();
+        let mut args = vec![
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--input-folder",
+            dir,
+        ];
+        args.extend_from_slice(extra);
+        cli(&args)
+    }
+
+    #[test]
+    fn suffix_names_derived_batch_outputs() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = sm5_batch_dir(&["A Is For Action", "sign_h", "muka"])?;
+        let c = batch_to_ddr(dir.path(), &["--suffix", "_h"])?;
+        c.validate()?;
+        let mut names: Vec<String> = c.into_jobs()?.iter().map(crate::job::output_stem).collect();
+        names.sort();
+        assert_eq!(names, ["aisf_h", "muka", "sign_h"]);
+        Ok(())
+    }
+
+    #[test]
+    fn suffix_works_in_single_file_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let c = cli(&[
+            "--from-format",
+            "SM5",
+            "--to-format",
+            "DDR",
+            "--chartfile",
+            "Sign Here.ssc",
+            "--audiofile",
+            "Sign Here.ogg",
+            "--suffix",
+            "_h",
+        ])?;
+        c.validate()?;
+        let jobs = c.into_jobs()?;
+        assert_eq!(crate::job::output_stem(&jobs[0]), "sign_h");
+        Ok(())
+    }
+
+    #[test]
+    fn colliding_output_names_fail_planning() -> Result<(), Box<dyn std::error::Error>> {
+        // Both derive to `sign_h`; so does the already-valid `sign_h`.
+        let dir = sm5_batch_dir(&["Sign Here", "Sign There", "sign_h"])?;
+        let c = batch_to_ddr(dir.path(), &["--suffix", "_h"])?;
+        c.validate()?;
+        match c.into_jobs() {
+            Err(CliError::OutputNameCollision { name, paths }) => {
+                assert_eq!(name, "sign_h");
+                assert_eq!(paths.len(), 3);
+            }
+            other => panic!("expected OutputNameCollision, got {other:?}"),
+        }
+        // Without a suffix the derived names are `sign`, so only the two
+        // derived ones collide.
+        let c = batch_to_ddr(dir.path(), &[])?;
+        match c.into_jobs() {
+            Err(CliError::OutputNameCollision { name, paths }) => {
+                assert_eq!(name, "sign");
+                assert_eq!(paths.len(), 2);
+            }
+            other => panic!("expected OutputNameCollision, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn suffix_rejected_for_sm5_output() -> Result<(), clap::Error> {
+        let c = cli(&[
+            "--from-format",
+            "DDR",
+            "--to-format",
+            "SM5",
+            "--input-folder",
+            "/tmp/songs",
+            "--suffix",
+            "_h",
+        ])?;
+        assert!(matches!(
+            c.validate(),
+            Err(CliError::SuffixRequiresDdrOutput)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn suffix_must_keep_codes_valid() -> Result<(), clap::Error> {
+        // (An empty value never gets this far: clap rejects it.)
+        for bad in ["_H", "h-", "_h!", "_abcdefghijkl"] {
+            let c = cli(&[
+                "--from-format",
+                "SM5",
+                "--to-format",
+                "DDR",
+                "--input-folder",
+                "/tmp/songs",
+                "--suffix",
+                bad,
+            ])?;
+            assert!(
+                matches!(c.validate(), Err(CliError::BadSuffix { .. })),
+                "expected BadSuffix for {bad:?}"
+            );
+        }
+        Ok(())
     }
 }
