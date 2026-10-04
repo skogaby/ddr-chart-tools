@@ -10,7 +10,7 @@ pub enum Format {
     /// Modern DDR (SSQ + XWB + XSB).
     #[value(name = "DDR")]
     Ddr,
-    /// Pre-DDR-World legacy (SSQ + XWB or WAVM). Input only.
+    /// Pre-DDR-World legacy (SSQ + XWB, WAVM, or WAV). Input only.
     #[value(name = "DDR_LEGACY")]
     DdrLegacy,
     /// StepMania 5 (SSC/SM + OGG).
@@ -31,7 +31,7 @@ impl Format {
     pub fn audio_extensions(self) -> &'static [&'static str] {
         match self {
             Self::Ddr => &["xwb"],
-            Self::DdrLegacy => &["xwb", "wavm"],
+            Self::DdrLegacy => &["xwb", "wavm", "wav"],
             Self::Sm5 => &["ogg"],
         }
     }

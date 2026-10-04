@@ -73,6 +73,7 @@ This tool has no external integrations. Everything is local file I/O. No network
 - **SSQ chunk lookup has two sentinels**: `length == 0` and `param2 == 0xFFFF` both terminate chunk scans. Writers must not emit either value spuriously.
 - **SM vs SSC parsing**: both use MSD-style `#TAG:VALUE;` syntax but SSC has per-chart timing sections that SM lacks. Don't assume an SM parser handles SSC or vice versa.
 - **XWB ADPCM ≠ standard IMA ADPCM**: Microsoft's XACT format uses a specific variant. Read the audio stream format from the wave bank entry header, don't assume.
+- **Type 9 means two different things**: in arcade SSQs it is a rare song-metadata chunk (dropped); in Hudson SSQs (Hottest Party, Mario Mix) it is the chart itself. `ssq::hudson::is_step_chunk` tells them apart by `param2` being a step difficulty code. Hudson charts are always neutralized to gimmicks-off at parse time; see `docs/hudson_ssq_format.md` §4.
 - **WAVM is headerless**: the format has no magic bytes or metadata block; channels and sample rate are fixed by convention (2ch, 44.1 kHz). Detection is by extension and file-length modulo block size.
 - **Note-type mapping across formats** (shocks, mines, freezes, rolls): each format encodes these differently. Mapping lives in `model/` with explicit fail-loud behavior when a source note type has no target representation.
 - **Floating-point BPM round-trips**: SSQ stores tempo as fixed-point tied to TPS; SSC stores it as decimal strings. Going DDR → SM5 → DDR can drift BPMs. Use consistent rounding and document the precision expected.

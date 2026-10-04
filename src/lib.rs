@@ -14,6 +14,7 @@ pub mod ssq;
 pub mod ssq_legacy;
 pub mod sync;
 pub mod util;
+pub mod wav;
 pub mod wavm;
 pub mod xsb;
 pub mod xwb;

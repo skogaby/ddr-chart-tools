@@ -21,6 +21,9 @@ pub enum Error {
     #[error("OGG error: {0}")]
     Ogg(#[from] crate::ogg::OggError),
 
+    #[error("WAV error: {0}")]
+    Wav(#[from] crate::wav::WavError),
+
     #[error("WAVM error: {0}")]
     Wavm(#[from] crate::wavm::WavmError),
 

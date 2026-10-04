@@ -15,8 +15,12 @@ use super::SsqError;
 /// Low byte is the style (0x14 Single, 0x18 Double); high byte is the
 /// difficulty slot (0x01 Basic, 0x02 Difficult, 0x03 Expert, 0x04
 /// Beginner, 0x06 Challenge). Any other combination is rejected — the
-/// DDR World dispatcher only accepts this exact set (spec §5.1).
-fn decode_difficulty_code(code: u16, chunk_offset: usize) -> Result<(Style, Difficulty), SsqError> {
+/// DDR World dispatcher only accepts this exact set (spec §5.1). Hudson
+/// type 9 step chunks use the same encoding (`docs/hudson_ssq_format.md` §1).
+pub(super) fn decode_difficulty_code(
+    code: u16,
+    chunk_offset: usize,
+) -> Result<(Style, Difficulty), SsqError> {
     let style = match code & 0x00FF {
         0x14 => Style::Single,
         0x18 => Style::Double,

@@ -15,8 +15,8 @@ A command-line utility for converting and modifying song and chart assets betwee
 |-----------------|---------------|-----------|-----------|-----------|
 | `DDR`           | `SM5`         | ✅        | SSQ → SSC | XWB → OGG |
 | `SM5`           | `DDR`         | ✅        | SSC or SM → SSQ | OGG → XWB (+ XSB) |
-| `DDR_LEGACY`    | `DDR`         | ✅        | legacy SSQ → modern SSQ | XWB or WAVM → XWB (+ XSB) |
-| `DDR_LEGACY`    | `SM5`         | ✅        | legacy SSQ → SSC | XWB or WAVM → OGG |
+| `DDR_LEGACY`    | `DDR`         | ✅        | legacy SSQ → modern SSQ | XWB, WAVM, or WAV → XWB (+ XSB) |
+| `DDR_LEGACY`    | `SM5`         | ✅        | legacy SSQ → SSC | XWB, WAVM, or WAV → OGG |
 | anything        | `DDR_LEGACY`  | ❌ not supported — legacy authoring is out of scope |
 
 When the output is StepMania 5 format, the tool always produces **SSC**, never SM.
@@ -178,6 +178,8 @@ wrong type is rejected outright rather than merely misbehaving.
 - **XWB** — Microsoft XACT Wave Bank. DDR's audio container.
 - **XSB** — Microsoft XACT Sound Bank. Names the cues inside an XWB; required by DDR for the audio to be playable.
 - **WAVM** — Headerless XBOX-IMA ADPCM audio (2ch, 44.1 kHz). Ultramix-era audio format.
+- **WAV** — RIFF WAVE, 16-bit PCM. Accepted as `DDR_LEGACY` audio. Encoded at its source rate with no resampling; 32 kHz (DDR Hottest Party rips) is accepted for DDR output alongside 44.1 and 48 kHz.
+- **Hudson SSQ charts** — DDR Hottest Party / Mario Mix (Wii, GameCube) store charts as type 9 chunks with gimmick items. `DDR_LEGACY` input converts them to the game's own gimmicks-off chart: gimmick and hand-marker arrows become normal arrows, "Koopa" arrows gain their one-beat echo arrow, hazards are removed, and freezes are kept. See `docs/hudson_ssq_format.md`.
 - **SSC** — StepMania 5's simfile format. The tool's only SM5 output.
 - **SM** — StepMania's older simfile format. Accepted as input (when `--from-format SM5`); never written.
 - **OGG** — Ogg Vorbis audio. StepMania 5's standard audio format. As SM5→DDR input it must be stereo at 44.1 or 48 kHz (see "SM5 → DDR audio requirements").

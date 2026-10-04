@@ -22,6 +22,7 @@ use crate::ssq;
 use crate::ssq::events::SsqEvent;
 use crate::ssq_legacy;
 use crate::sync::TimeMap;
+use crate::wav;
 use crate::wavm;
 use crate::xsb;
 use crate::xwb;
@@ -34,9 +35,11 @@ use crate::xwb::container::{WaveFormat, XwbBank, XwbEntry};
 /// fixed 44.1 kHz mix buffer. The chart clock in `gamemdx` is a wall-clock
 /// delta and never consults the rate, so any rate the engine can decode
 /// stays in sync. Stock content is 44.1 kHz; 48 kHz is the other rate
-/// StepMania packs commonly ship at. Anything else is almost certainly a
-/// mistake (a downsampled preview, a voice clip) and is refused.
-const DDR_SAMPLE_RATES: [u32; 2] = [44_100, 48_000];
+/// StepMania packs commonly ship at; 32 kHz is what DDR Hottest Party's
+/// Wii audio rips come at, admitted unresampled at the user's request and
+/// not yet verified in-game. Anything else is almost certainly a mistake
+/// (a downsampled preview, a voice clip) and is refused.
+const DDR_SAMPLE_RATES: [u32; 3] = [32_000, 44_100, 48_000];
 /// Channel count DDR World's song wave banks are authored at. The ADPCM
 /// encoder de-interleaves by this count, so any other layout would be
 /// scrambled.
@@ -443,11 +446,16 @@ fn resolve_song_code(job: &Job) -> String {
 /// valid code in its own right. Stock DDR IDs are 4–5 characters.
 const SONG_CODE_FALLBACK_LEN: usize = 4;
 
-/// Detect and decode legacy audio (XWB or WAVM) by header inspection.
+/// Detect and decode legacy audio (XWB, RIFF WAV, or WAVM) by header
+/// inspection.
 fn decode_legacy_audio(bytes: &[u8]) -> Result<AudioBuffer, Error> {
     // Try XWB first (has "WBND" magic).
     if bytes.len() >= 4 && &bytes[..4] == b"WBND" {
         return Ok(xwb::parse_audio(bytes)?);
+    }
+    // RIFF/WAVE PCM (e.g. Hottest Party rips).
+    if wav::is_wav(bytes) {
+        return Ok(wav::parse(bytes)?);
     }
     // Fall back to WAVM (headerless XBOX-IMA).
     Ok(wavm::parse(bytes)?)
@@ -1117,6 +1125,13 @@ mod tests {
         // engine resamples at playback. Previously this was mislabelled
         // as 44.1 kHz and played ~9% slow.
         assert!(validate_ddr_audio(&audio(48_000, 2)).is_ok());
+    }
+
+    #[test]
+    fn ddr_audio_accepts_32000_stereo() {
+        // Hottest Party rips are 32 kHz and are carried unresampled.
+        assert!(validate_ddr_audio(&audio(32_000, 2)).is_ok());
+        assert_eq!(ddr_wave_format(32_000).sample_rate(), 32_000);
     }
 
     #[test]

@@ -7,6 +7,11 @@
 //! an earlier DDR release — that distinction is a CLI/job-level concern
 //! captured by the `--from-format` flag, not by the parser.
 //!
+//! Hudson-format charts (type 9 chunks carrying a step difficulty code,
+//! from DDR Hottest Party / Mario Mix) are decoded by [`hudson`] and
+//! neutralized to their gimmicks-off form; the arcade type 9 metadata
+//! chunk is still dropped as auxiliary.
+//!
 //! `parse` returns an [`SsqParseResult`] bundling the format-independent
 //! [`Song`] with SSQ-specific sidecar data: raw events (preserved for
 //! DDR→DDR round-trips) and metadata describing any auxiliary chunks
@@ -15,6 +20,7 @@
 pub mod auxiliary;
 pub mod chunk;
 pub mod events;
+pub mod hudson;
 pub mod mines;
 pub mod steps;
 pub mod tempo;
@@ -142,6 +148,13 @@ fn dispatch_chunk(
             }
             partial.events = events::parse_events_chunk(header, body, offset)?;
             partial.events_seen = true;
+            Ok(())
+        }
+        9 if hudson::is_step_chunk(header) => {
+            // Hudson-format chart (DDR Hottest Party / Mario Mix,
+            // `docs/hudson_ssq_format.md`), neutralized to gimmicks off.
+            let chart = hudson::parse_steps_chunk(header, body, offset)?;
+            partial.charts.push(chart);
             Ok(())
         }
         4 | 5 | 9 | 17 => {

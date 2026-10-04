@@ -19,7 +19,7 @@ Before making non-trivial decisions, read the relevant file under `.spec/`. Do n
 - `.spec/workflow/{feature}/` — per-feature requirements, design, and tasks for in-flight work.
 - `.spec/learnings/{agent-name}.md` — project-scoped self-learning log for SDD agents.
 
-Byte-level format specs live under `docs/` (`ssq_format.md`, `ssq_mine_chunk_format.md`, `xsb_format.md`, `ultramix_archive_formats.md`). Treat these as reference documents — do not edit them as part of implementation work.
+Byte-level format specs live under `docs/` (`ssq_format.md`, `ssq_mine_chunk_format.md`, `hudson_ssq_format.md`, `xsb_format.md`, `ultramix_archive_formats.md`). Treat these as reference documents — do not edit them as part of implementation work.
 
 ## Commands
 

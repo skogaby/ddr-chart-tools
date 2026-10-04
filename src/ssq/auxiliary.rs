@@ -6,6 +6,9 @@
 //! markers that the DDR World step engine does not consume. Authoring
 //! tools targeting modern DDR should not emit them.
 //!
+//! A type 9 chunk whose `param2` is a step difficulty code is not
+//! auxiliary: it is a Hudson-format chart, handled by `ssq::hudson`.
+//!
 //! This parser does not preserve their contents. It emits [`AuxMeta`]
 //! records describing what was dropped, which the caller can surface
 //! in log output alongside the source filename.
