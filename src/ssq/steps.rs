@@ -74,10 +74,13 @@ pub fn parse_steps_chunk(
 }
 
 /// One entry from the freeze block: panel mask + kind byte.
+///
+/// Also built synthetically by `ssq::hudson_lane`, which folds its
+/// per-lane rows into this type-3 shape to share freeze resolution.
 #[derive(Debug, Clone, Copy)]
-struct FreezeEntry {
-    panels: u8,
-    kind: u8,
+pub(super) struct FreezeEntry {
+    pub(super) panels: u8,
+    pub(super) kind: u8,
 }
 
 /// Split the chunk body into its three sections.
@@ -186,7 +189,7 @@ fn classify_step_byte(byte: u8, style: Style) -> Option<(NoteKind, PanelSet)> {
 /// recent tap that hit that panel and promote it to a [`HoldHead`] with
 /// length = current_tick − head_tick. Other kind values are silently
 /// ignored (spec §5.4).
-fn resolve_notes(
+pub(super) fn resolve_notes(
     style: Style,
     time_offsets: &[i32],
     step_bytes: &[u8],

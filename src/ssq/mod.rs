@@ -10,7 +10,9 @@
 //! Hudson-format charts (type 9 chunks carrying a step difficulty code,
 //! from DDR Hottest Party / Mario Mix) are decoded by [`hudson`] and
 //! neutralized to their gimmicks-off form; the arcade type 9 metadata
-//! chunk is still dropped as auxiliary.
+//! chunk is still dropped as auxiliary. The later lane-format charts
+//! (type 16, DDR Hottest Party 4 / 5) are decoded by [`hudson_lane`];
+//! their Wii-controller-mode variants are dropped as auxiliary.
 //!
 //! `parse` returns an [`SsqParseResult`] bundling the format-independent
 //! [`Song`] with SSQ-specific sidecar data: raw events (preserved for
@@ -21,6 +23,7 @@ pub mod auxiliary;
 pub mod chunk;
 pub mod events;
 pub mod hudson;
+pub mod hudson_lane;
 pub mod mines;
 pub mod steps;
 pub mod tempo;
@@ -103,9 +106,10 @@ pub struct SsqParseResult {
     /// tempo chunk byte-for-byte. SM5→DDR writes ignore this and
     /// synthesize pairs from the semantic `tempo_segments` + `stops`.
     pub raw_tempo_pairs: Vec<(i32, i32)>,
-    /// Metadata for each auxiliary chunk (types 4/5/9/17) that was
-    /// encountered and dropped. Callers typically log these at `warn`
-    /// level with the source filename attached.
+    /// Metadata for each auxiliary chunk (types 4/5/9/17/18, plus type 16
+    /// controller-mode charts) that was encountered and dropped. Callers
+    /// typically log these at `warn` level with the source filename
+    /// attached.
     pub aux_chunks_dropped: Vec<AuxMeta>,
 }
 
@@ -157,7 +161,30 @@ fn dispatch_chunk(
             partial.charts.push(chart);
             Ok(())
         }
-        4 | 5 | 9 | 17 => {
+        16 if hudson_lane::is_foot_chart(header) => {
+            // Hudson lane-format chart (DDR Hottest Party 4 / 5,
+            // `docs/hudson_lane_ssq_format.md`).
+            let chart = hudson_lane::parse_steps_chunk(header, body, offset)?;
+            partial.charts.push(chart);
+            Ok(())
+        }
+        16 => {
+            // A Wii Remote / Balance Board mode chart; its lanes are not
+            // dance panels and have no model representation
+            // (`docs/hudson_lane_ssq_format.md` §1.1).
+            log::warn!(
+                "dropping Hottest Party controller-mode chart (style code 0x{:04X}) at byte {offset} (size {}); only foot charts are converted",
+                header.param2,
+                header.length
+            );
+            partial.aux_chunks_dropped.push(AuxMeta {
+                ty: header.ty,
+                offset,
+                size: header.length,
+            });
+            Ok(())
+        }
+        4 | 5 | 9 | 17 | 18 => {
             log::warn!(
                 "dropping auxiliary chunk type {} at byte {offset} (size {})",
                 header.ty,

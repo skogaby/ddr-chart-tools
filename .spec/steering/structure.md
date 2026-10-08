@@ -19,6 +19,7 @@ ddr-chart-tools/
 │   ├── ssq_format.md                  # byte-level SSQ spec — authoritative reference for the SSQ parser
 │   ├── xsb_format.md                  # byte-level XSB spec — authoritative reference for the XSB writer
 │   ├── hudson_ssq_format.md           # Hudson type 9 step chunk spec + gimmicks-off rules (Hottest Party / Mario Mix)
+│   ├── hudson_lane_ssq_format.md      # Hudson type 16 lane-format step chunk spec (Hottest Party 4 / 5)
 │   └── ultramix_archive_formats.md    # byte-level x_data / .sng / .sif specs — authoritative reference for the Ultramix extractor
 ├── scripts/
 │   └── extract_ultramix_xdata.py      # standalone Ultramix asset extractor (x_data bin + music .sng)
@@ -79,7 +80,7 @@ ddr-chart-tools/
 | `cli/` | arg parsing, validation, translating CLI intent into a list of conversion jobs | file I/O, format parsing |
 | `job/` | per-job orchestration (dispatch, output paths, overwrite check, Ultramix `.sif` ingestion, sync-offset bias, auto-sync orchestration and the whole-chart timeline shift in `sync_offset.rs`), batch runner with per-file error recovery | CLI concerns, binary-level format details, signal analysis (that is `sync/`) |
 | `model/` | format-independent types and rules about valid combinations | any I/O, any format-specific encoding |
-| `ssq/` | modern SSQ parse + write, chunk types 1/2/3 and 20 (mines); Hudson type 9 chart decode + gimmicks-off neutralization (`hudson.rs`); see `docs/ssq_format.md`, `docs/ssq_mine_chunk_format.md`, `docs/hudson_ssq_format.md` | SSC writing, audio |
+| `ssq/` | modern SSQ parse + write, chunk types 1/2/3 and 20 (mines); Hudson type 9 chart decode + gimmicks-off neutralization (`hudson.rs`); Hudson type 16 lane-format chart decode (`hudson_lane.rs`); see `docs/ssq_format.md`, `docs/ssq_mine_chunk_format.md`, `docs/hudson_ssq_format.md`, `docs/hudson_lane_ssq_format.md` | SSC writing, audio |
 | `ssq_legacy/` | legacy SSQ modernization (origin-shift normalization, TPS rescale, aux-chunk drop) | writing SSQs (defers to `ssq/`) |
 | `sync/` | auto-sync analysis as pure computation: onset envelope of an `AudioBuffer`, beat→time mapping for analysis (`TimeMap`), weighted chart events, and the chart-vs-audio offset estimate with its refusal rules | I/O, format parsing, applying a correction to a song (the job layer does that), audio modification |
 | `ssc/` | SSC text parse + write | SM parsing (separate module), audio |
@@ -111,7 +112,7 @@ ddr-chart-tools/
 - **Don't put format-specific types in `model/`**. If something belongs only to SSQ, it goes in `ssq/`.
 - **Don't bypass the model layer**. A direct `src/ssq_to_ssc.rs` is wrong; always `ssq → model → ssc`.
 - **Don't add a file at repo root that isn't in the top-level layout above** without updating this document first.
-- **Don't edit `docs/ssq_format.md`, `docs/xsb_format.md`, `docs/ultramix_archive_formats.md`, or `docs/hudson_ssq_format.md`** as part of implementation work — they're reference documents, not living design artifacts. If a format doc is wrong, that's a separate, explicit task.
+- **Don't edit `docs/ssq_format.md`, `docs/xsb_format.md`, `docs/ultramix_archive_formats.md`, `docs/hudson_ssq_format.md`, or `docs/hudson_lane_ssq_format.md`** as part of implementation work — they're reference documents, not living design artifacts. If a format doc is wrong, that's a separate, explicit task.
 
 ## Where to Find Things
 

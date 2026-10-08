@@ -1,8 +1,10 @@
 //! `DDR_LEGACY → DDR` for Hudson-format (DDR Hottest Party) inputs:
-//! type 9 step chunks with gimmick items, plus RIFF WAV audio.
+//! type 9 step chunks with gimmick items (HP1), type 16 lane-format step
+//! chunks (HP4 / HP5), plus RIFF WAV audio.
 //!
-//! Fixtures are synthetic, built from `docs/hudson_ssq_format.md` and the
-//! RIFF spec; no game assets are read.
+//! Fixtures are synthetic, built from `docs/hudson_ssq_format.md`,
+//! `docs/hudson_lane_ssq_format.md`, and the RIFF spec; no game assets
+//! are read.
 
 mod common;
 
@@ -93,6 +95,61 @@ fn hudson_ssq() -> Vec<u8> {
     let chart = hudson_body(&rows, &[1, 2, 5], &[0x01]);
     push_chunk(&mut out, 9, 0x0114, rows.len() as u16, &chart);
     push_chunk(&mut out, 9, 0, 0, b"Some Artist\0");
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out
+}
+
+/// Body of a Hudson lane-format type 16 chunk. `rows` are
+/// `(tick, lane, item type, item param)`.
+fn lane_body(rows: &[(i32, u8, i16, u16)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (tick, _, _, _) in rows {
+        body.extend_from_slice(&tick.to_le_bytes());
+    }
+    for (_, lane, _, _) in rows {
+        body.push(*lane);
+    }
+    while !body.len().is_multiple_of(4) {
+        body.push(0);
+    }
+    for (_, _, ty, param) in rows {
+        body.extend_from_slice(&ty.to_le_bytes());
+        body.extend_from_slice(&param.to_le_bytes());
+    }
+    body
+}
+
+/// A Hottest Party 4–shaped SSQ: the same tempo and events as
+/// [`hudson_ssq`], one Single Basic type 16 foot chart, one hand-mode
+/// (style `0x1a`) type 16 chart that must be dropped, and an HP5-style
+/// type 18 chunk.
+fn lane_ssq() -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut tempo = Vec::new();
+    for v in [0i32, 8 * 4096, 0, 8 * 300] {
+        tempo.extend_from_slice(&v.to_le_bytes());
+    }
+    push_chunk(&mut out, 1, TPS, 2, &tempo);
+    let mut events = 0i32.to_le_bytes().to_vec();
+    events.extend_from_slice(&[1, 4]);
+    push_chunk(&mut out, 2, 1, 1, &events);
+
+    let rows: [(i32, u8, i16, u16); 6] = [
+        (4096, 0, 0, 0), // Left
+        (5120, 1, 0, 0), // Down + Right jump
+        (5120, 3, 0, 0),
+        (6144, 2, 0, 0), // Up freeze head
+        (8192, 2, 0, 1), // Up freeze end
+        (8192, 0, 0, 0), // Left, same tick as the freeze end
+    ];
+    push_chunk(&mut out, 16, 0x0114, rows.len() as u16, &lane_body(&rows));
+    let hand: [(i32, u8, i16, u16); 2] = [(4096, 4, 1, 8), (4096, 5, 2, 4)];
+    push_chunk(&mut out, 16, 0x011a, hand.len() as u16, &lane_body(&hand));
+    let mut markers = Vec::new();
+    for v in [0xa000u32, 0x1e000, 0, 0] {
+        markers.extend_from_slice(&v.to_le_bytes());
+    }
+    push_chunk(&mut out, 18, 0, 2, &markers);
     out.extend_from_slice(&0u32.to_le_bytes());
     out
 }
@@ -227,5 +284,51 @@ fn hudson_chart_converts_to_sm5() -> TestResult {
     let ssc = fs::read_to_string(out.join("hpsong.ssc"))?;
     assert!(ssc.contains("#NOTES:"), "{ssc}");
     assert!(out.join("hpsong.ogg").exists());
+    Ok(())
+}
+
+#[test]
+fn lane_chart_converts_to_ddr_and_drops_controller_modes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let input = dir.path().join("in");
+    fs::create_dir_all(&input)?;
+    let chart = input.join("hp4song.ssq");
+    let audio = input.join("hp4song.wav");
+    fs::write(&chart, lane_ssq())?;
+    fs::write(&audio, wav(20))?;
+    let out = dir.path().join("out");
+    let logs = convert("DDR_LEGACY", "DDR", &chart, &audio, &out, &[])?;
+    assert!(
+        logs.contains("controller-mode chart (style code 0x011A)"),
+        "{logs}"
+    );
+    assert!(logs.contains("auxiliary chunk type 18"), "{logs}");
+
+    let parsed = ssq::parse(&fs::read(out.join("hp4song.ssq"))?)?;
+    assert_eq!(parsed.song.tps, 1000);
+    assert_eq!(parsed.song.charts.len(), 1, "hand chart must be dropped");
+    let chart = &parsed.song.charts[0];
+    assert_eq!(chart.style, Style::Single);
+    let notes: Vec<(i64, u8, Option<i64>)> = chart
+        .notes
+        .iter()
+        .map(|n| {
+            let len = match n.kind {
+                NoteKind::HoldHead { length } => Some(ticks(length)),
+                _ => None,
+            };
+            (ticks(n.beat), n.panels.bits(), len)
+        })
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            (4096, 0x01, None),
+            (5120, 0x0A, None),
+            (6144, 0x04, Some(2048)),
+            (8192, 0x01, None),
+        ]
+    );
+    assert!(out.join("hp4song.xwb").exists());
     Ok(())
 }

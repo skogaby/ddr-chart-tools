@@ -192,6 +192,7 @@ wrong type is rejected outright rather than merely misbehaving.
 - **WAVM** — Headerless XBOX-IMA ADPCM audio (2ch, 44.1 kHz). Ultramix-era audio format.
 - **WAV** — RIFF WAVE, 16-bit PCM. Accepted as `DDR_LEGACY` audio. Encoded at its source rate with no resampling; 32 kHz (DDR Hottest Party rips) is accepted for DDR output alongside 44.1 and 48 kHz.
 - **Hudson SSQ charts** — DDR Hottest Party / Mario Mix (Wii, GameCube) store charts as type 9 chunks with gimmick items. `DDR_LEGACY` input converts them to the game's own gimmicks-off chart: gimmick and hand-marker arrows become normal arrows, "Koopa" arrows gain their one-beat echo arrow, hazards are removed, and freezes are kept. See `docs/hudson_ssq_format.md`.
+- **Hottest Party 4 / 5 charts** — stored as type 16 lane-format chunks. Foot charts (Single, and Double on HP5) convert directly; these games keep gimmicks outside the chart file, so nothing is neutralized. The Wii Remote / Balance Board chart variants have no DDR equivalent and are dropped with a warning. See `docs/hudson_lane_ssq_format.md`.
 - **SSC** — StepMania 5's simfile format. The tool's only SM5 output.
 - **SM** — StepMania's older simfile format. Accepted as input (when `--from-format SM5`); never written.
 - **OGG** — Ogg Vorbis audio. StepMania 5's standard audio format. As SM5→DDR input it must be stereo at 44.1 or 48 kHz (see "SM5 → DDR audio requirements").

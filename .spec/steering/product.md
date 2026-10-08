@@ -39,6 +39,7 @@ Terms that appear in code, CLI help text, and documentation:
 - **WAVM** — Headerless XBOX-IMA ADPCM audio (fixed 2 channels, 44.1 kHz). The audio format used by Ultramix on Xbox; extracted from `music_*.sng` archives.
 - **WAV** — RIFF WAVE, 16-bit PCM. Accepted as `DDR_LEGACY` audio (e.g. DDR Hottest Party rips, 32 kHz) and encoded at its source rate.
 - **Hudson chart** — A type 9 SSQ step chunk from Hudson Soft's Wii/GameCube DDRs (Hottest Party, Mario Mix), carrying gimmick "chara note" items. Spec: `docs/hudson_ssq_format.md`. Always converted to the game's gimmicks-off, hand-markers-off chart. Distinct from the arcade type 9 metadata chunk, which is still dropped.
+- **Hudson lane chart** — A type 16 SSQ step chunk from DDR Hottest Party 4 / 5, one lane per row instead of a panel mask. Spec: `docs/hudson_lane_ssq_format.md`. Foot charts (style `0x14`/`0x18`) convert directly; they carry no gimmick items. Wii Remote / Balance Board chart styles in the same chunk type are dropped with a `warn`.
 - **Ultramix** — Shorthand for the Xbox-era Dance Dance Revolution Ultramix 1-4 titles. Their archive formats are documented in `docs/ultramix_archive_formats.md`.
 - **OGG** — Ogg Vorbis audio. StepMania 5's standard audio format.
 - **Chart / Stepfile** — The data describing what steps a player performs. "Stepfile" usually refers to the file on disk (`.ssq`, `.ssc`, `.sm`); "chart" refers to a single difficulty within it.
