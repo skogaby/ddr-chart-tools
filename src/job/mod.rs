@@ -158,7 +158,8 @@ fn sm5_to_ddr(job: &Job) -> Result<(), Error> {
     let end_beat = crate::model::Beat::from_measure_ticks(i64::from(end_tick))
         .map_err(|e| ssq::SsqError::Write(format!("end beat: {e}")))?;
     let initial_tempo_pairs = ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))?;
-    let (events, mut tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs);
+    // An SSC has no END of its own: END is derived from the notes.
+    let (events, mut tempo_pairs) = synthesize_events(&song, &initial_tempo_pairs, None);
     if let Some(cfg) = job.auto_sync {
         // Measured against the pairs the SSQ will carry, so the chart is
         // judged by exactly what the game will play.
@@ -209,11 +210,16 @@ fn legacy_to_ddr(job: &Job) -> Result<(), Error> {
     // (alt-start cue 0xF8) at a different tick than event[2] (chart
     // start 0xFA), which DDR World rejects. Synthesizing from scratch
     // matches the SM5→DDR path and produces the spec's canonical shape.
-    // `synthesize_events` also extends `raw_tempo_pairs` as needed to
-    // keep FINISH bracketed by TIMING notes (see its doc comment). The
-    // bias is applied to the final pairs, so any extrapolated trailing
-    // pair moves with the rest of the chart.
-    let (events, mut tempo_pairs) = synthesize_events(&result.song, &result.raw_tempo_pairs);
+    // The source's END tick is the one thing kept: it is where the song
+    // stops, and the tempo chunk can run far past it (HOTTEST PARTY 5's
+    // short cuts carry the full song's tempo). `synthesize_events` cuts
+    // or extends `raw_tempo_pairs` to END so FINISH stays bracketed by
+    // TIMING notes (see its doc comment). The bias is applied to the
+    // final pairs, so any synthesized trailing pair moves with the rest
+    // of the chart.
+    let source_end = source_end_tick(&result.song, &result.events, &job.chart_in);
+    let (events, mut tempo_pairs) =
+        synthesize_events(&result.song, &result.raw_tempo_pairs, source_end);
     // Auto-sync needs decoded audio even when the XWB will be byte-copied
     // below; the decode is kept for re-encoding when it is not. Failing
     // to decode *for analysis* only skips auto-sync.
@@ -742,18 +748,25 @@ fn chart_end_tick(song: &crate::model::Song) -> i32 {
 /// slope. The SM5→DDR path pre-places its trailing pair at
 /// `chart_end_tick` with exact tempo math, so extrapolation is only
 /// ever exercised for legacy sources.
+///
+/// `source_end` is the END tick the source chart itself declares (see
+/// [`source_end_tick`]). When present it wins: the source's own END is
+/// where its game stops the song, and the tempo chunk may run well past
+/// it (HOTTEST PARTY 5's licensed short cuts carry the full song's tempo
+/// chunk). The tempo pairs are then cut at END — interpolating a pair
+/// there — or extended to it, so the trailing pair still sits at END.
 fn synthesize_events(
     song: &crate::model::Song,
     raw_tempo_pairs: &[(i32, i32)],
+    source_end: Option<i32>,
 ) -> (Vec<SsqEvent>, Vec<(i32, i32)>) {
-    let desired_end = chart_end_tick(song);
-
     // Build the tempo-pair list that goes into the SSQ. Invariant:
     // the final pair's time_offset == end_tick, so END coincides with
     // the trailing TIMING note and FINISH (one measure earlier) falls
     // strictly inside the last real tempo bracket.
     let source_last_tick = raw_tempo_pairs.last().map(|p| p.0).unwrap_or(0);
-    let end_tick = std::cmp::max(desired_end, source_last_tick);
+    let end_tick =
+        source_end.unwrap_or_else(|| std::cmp::max(chart_end_tick(song), source_last_tick));
     let finish_tick = end_tick - 4096;
 
     let tempo_pairs = if raw_tempo_pairs.is_empty() {
@@ -761,8 +774,10 @@ fn synthesize_events(
         // (legacy_to_ddr has source pairs; sm5_to_ddr pre-synthesizes
         // pairs before calling us). Kept for test-robustness.
         Vec::new()
-    } else if source_last_tick >= end_tick {
+    } else if source_last_tick == end_tick {
         raw_tempo_pairs.to_vec()
+    } else if source_last_tick > end_tick {
+        truncate_tempo_pairs_at(raw_tempo_pairs, end_tick)
     } else {
         extend_tempo_pairs_to(raw_tempo_pairs, end_tick)
     };
@@ -801,6 +816,68 @@ fn synthesize_events(
     ];
 
     (events, tempo_pairs)
+}
+
+/// The END tick a source chart declares: its last code-2 arg-4 event
+/// (spec §4.3), when that leaves room for FINISH one measure earlier
+/// after the chart-start cue at tick 4096. A source with no usable END
+/// returns `None` and the caller derives END from the notes instead.
+///
+/// The source's END is trusted even when notes sit past it: that is
+/// where the source game stops the song too, so a warning is logged
+/// rather than END being moved.
+fn source_end_tick(song: &crate::model::Song, events: &[SsqEvent], chart: &Path) -> Option<i32> {
+    let end = events
+        .iter()
+        .rev()
+        .find(|e| e.code == 2 && e.arg == 4)?
+        .tick;
+    if end <= 8192 {
+        warn!(
+            "{}: source END at tick {end} leaves no room for FINISH; ending the chart after its last note instead",
+            chart.display()
+        );
+        return None;
+    }
+    let notes_end = chart_end_tick(song) - 8192;
+    if notes_end > end {
+        warn!(
+            "{}: notes run past the source chart's END (tick {notes_end} > {end}); keeping the source END",
+            chart.display()
+        );
+    }
+    Some(end)
+}
+
+/// Cut a tempo-pair list at `end_tick`: pairs before it are kept, and a
+/// trailing pair is placed exactly at `end_tick` — the source's own pair
+/// if it has one there (the first, if a stop starts there), otherwise
+/// one interpolated across the segment that spans `end_tick`.
+///
+/// Callers guarantee the last pair's tick is past `end_tick`.
+fn truncate_tempo_pairs_at(pairs: &[(i32, i32)], end_tick: i32) -> Vec<(i32, i32)> {
+    let mut out: Vec<(i32, i32)> = pairs
+        .iter()
+        .copied()
+        .take_while(|p| p.0 < end_tick)
+        .collect();
+    let Some(&next) = pairs.iter().find(|p| p.0 >= end_tick) else {
+        // Unreachable under the caller's guarantee; fall back to the
+        // input rather than drop the tempo map.
+        return pairs.to_vec();
+    };
+    let seconds = match out.last() {
+        Some(&(m0, s0)) if next.0 > end_tick => {
+            let (dt, ds) = (i64::from(next.0 - m0), i64::from(next.1) - i64::from(s0));
+            let extra = i64::from(end_tick - m0);
+            // dt > 0: m0 < end_tick < next.0.
+            let s = i64::from(s0) + (ds * extra + dt / 2) / dt;
+            s.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+        }
+        _ => next.1,
+    };
+    out.push((end_tick, seconds));
+    out
 }
 
 /// Append a synthesized trailing tempo pair at `end_tick`, extrapolating
@@ -968,7 +1045,7 @@ mod tests {
                 let end_beat =
                     crate::model::Beat::from_measure_ticks(i64::from(chart_end_tick(&song)))?;
                 let pairs = ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))?;
-                let (events, pairs) = synthesize_events(&song, &pairs);
+                let (events, pairs) = synthesize_events(&song, &pairs, None);
                 let mut ssq_bytes = Vec::new();
                 ssq::writer::write(&song, &events, &pairs, &mut ssq_bytes)?;
                 fs::write(&chart, ssq_bytes)?;
@@ -1335,7 +1412,7 @@ mod tests {
     #[test]
     fn events_have_canonical_6_entry_shape() {
         let song = song_with_last_note_at(232448); // beat 227
-        let (events, _) = synthesize_events(&song, &[]);
+        let (events, _) = synthesize_events(&song, &[], None);
         assert_eq!(events.len(), 6);
         // MEASURE(4/4) at 0, READY at 0, GO at 4096, EDIT at 4096
         assert_eq!(
@@ -1379,7 +1456,7 @@ mod tests {
         // strictly after the last note's measure boundary so the game
         // doesn't cut to results before the last note is played.
         let song = song_with_last_note_at(232448); // beat 227, last measure boundary = 233472
-        let (events, _) = synthesize_events(&song, &[]);
+        let (events, _) = synthesize_events(&song, &[], None);
         let (finish, end) = finish_and_end_ticks(&events);
         assert!(
             finish > 232448,
@@ -1408,7 +1485,7 @@ mod tests {
             (232448, 94773),
             (254976, 103747),
         ];
-        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, None);
         let (finish, end) = finish_and_end_ticks(&events);
         assert_eq!(
             end, 254976,
@@ -1435,7 +1512,7 @@ mod tests {
                                                    // 120 BPM, TPS=1000 → 500 seconds-ticks per beat.
                                                    // At beat 108 = 110592 measure-ticks, seconds-ticks = 108 * 500 = 54000.
         let raw_pairs = vec![(0, 0), (110592, 54000)];
-        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, None);
         let (finish, end) = finish_and_end_ticks(&events);
         // last_measure = 110592 (already measure-aligned)
         // desired_end = 110592 + 8192 = 118784
@@ -1460,7 +1537,7 @@ mod tests {
                                                    // Source tempo ending at beat 156 (last_note + 1 measure). 120 BPM.
                                                    // At tick 159744, seconds-ticks = 156 * 500 = 78000.
         let raw_pairs = vec![(0, 0), (159744, 78000)];
-        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, None);
         let (finish, end) = finish_and_end_ticks(&events);
         // last_measure = 155648 (already measure-aligned)
         // desired_end = 155648 + 8192 = 163840
@@ -1486,7 +1563,7 @@ mod tests {
         ];
         for (last_note, raw_pairs) in cases {
             let song = song_with_last_note_at(last_note);
-            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, None);
             let (finish, _) = finish_and_end_ticks(&events);
             // Find the two tempo ticks that straddle FINISH.
             let before = tempo_pairs
@@ -1516,7 +1593,7 @@ mod tests {
         ];
         for (last_note, raw_pairs) in cases {
             let song = song_with_last_note_at(last_note);
-            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs);
+            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, None);
             let (_, end) = finish_and_end_ticks(&events);
             assert_eq!(
                 end,
@@ -1524,6 +1601,75 @@ mod tests {
                 "END must equal last tempo tick for last_note={last_note}"
             );
         }
+    }
+
+    #[test]
+    fn source_end_wins_and_cuts_tempo_past_it() {
+        // HOTTEST PARTY 5 short cut: the tempo chunk runs to the full
+        // song (tick 16384) but the chart's own END is at 12288.
+        let song = song_with_last_note_at(4096);
+        let raw_pairs = vec![(0, 0), (16384, 8000)];
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, Some(12288));
+        let (finish, end) = finish_and_end_ticks(&events);
+        assert_eq!(end, 12288, "END is the source's END");
+        assert_eq!(finish, end - 4096);
+        assert_eq!(
+            tempo_pairs,
+            vec![(0, 0), (12288, 6000)],
+            "pair interpolated at END"
+        );
+    }
+
+    #[test]
+    fn source_end_on_a_pair_keeps_that_pair_and_drops_a_stop_there() {
+        let song = song_with_last_note_at(4096);
+        let raw_pairs = vec![(0, 0), (12288, 6000), (12288, 7000), (16384, 9000)];
+        let (_, tempo_pairs) = synthesize_events(&song, &raw_pairs, Some(12288));
+        assert_eq!(tempo_pairs, vec![(0, 0), (12288, 6000)]);
+    }
+
+    #[test]
+    fn source_end_past_the_tempo_chunk_extends_it() {
+        let song = song_with_last_note_at(4096);
+        let raw_pairs = vec![(0, 0), (8192, 4000)];
+        let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, Some(16384));
+        let (_, end) = finish_and_end_ticks(&events);
+        assert_eq!(end, 16384);
+        assert_eq!(tempo_pairs.last().copied(), Some((16384, 8000)));
+    }
+
+    #[test]
+    fn source_end_keeps_finish_bracketed() {
+        let song = song_with_last_note_at(4096);
+        for (raw_pairs, source_end) in [
+            (vec![(0, 0), (16384, 8000)], 12288),
+            (
+                vec![(0, 0), (12288, 6000), (12288, 7000), (16384, 9000)],
+                12288,
+            ),
+            (vec![(0, 0), (8192, 4000)], 16384),
+        ] {
+            let (events, tempo_pairs) = synthesize_events(&song, &raw_pairs, Some(source_end));
+            let (finish, end) = finish_and_end_ticks(&events);
+            assert!(tempo_pairs.iter().any(|p| p.0 <= finish));
+            assert!(tempo_pairs.iter().any(|p| p.0 > finish));
+            assert_eq!(tempo_pairs.last().map(|p| p.0), Some(end));
+        }
+    }
+
+    #[test]
+    fn source_end_tick_reads_the_end_event() {
+        let song = song_with_last_note_at(4096);
+        let chart = Path::new("song.ssq");
+        let ev = |tick, arg| SsqEvent { tick, code: 2, arg };
+        let events = [ev(0, 1), ev(4096, 2), ev(16384, 3), ev(20480, 4)];
+        assert_eq!(source_end_tick(&song, &events, chart), Some(20480));
+        // No END, or an END too early for FINISH: derive it instead.
+        assert_eq!(source_end_tick(&song, &events[..3], chart), None);
+        assert_eq!(source_end_tick(&song, &[ev(8192, 4)], chart), None);
+        // Notes past END only warn: the source's END is kept.
+        let late = song_with_last_note_at(40960);
+        assert_eq!(source_end_tick(&late, &events, chart), Some(20480));
     }
 
     #[test]
@@ -1590,7 +1736,7 @@ mod tests {
         // event sequence and not panic.
         let mut song = song_with_last_note_at(1024); // beat 1
         song.charts[0].notes.clear();
-        let (events, _) = synthesize_events(&song, &[]);
+        let (events, _) = synthesize_events(&song, &[], None);
         assert_eq!(events.len(), 6);
         let (finish, end) = finish_and_end_ticks(&events);
         assert!(end > finish);
@@ -1621,7 +1767,7 @@ mod tests {
         let end_beat = Beat::from_measure_ticks(i64::from(end_tick)).unwrap();
         let initial = crate::ssq::writer::synthesize_tempo_entries_until(&song, Some(end_beat))
             .expect("tempo synthesis");
-        let (events, pairs) = synthesize_events(&song, &initial);
+        let (events, pairs) = synthesize_events(&song, &initial, None);
         let (_, end) = finish_and_end_ticks(&events);
 
         assert_eq!(pairs, initial, "no extrapolated pair should be appended");
@@ -1657,7 +1803,7 @@ mod tests {
         // same as the source of the original bug.
         assert_eq!(initial_pairs.last().unwrap().0, 2937856);
 
-        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs);
+        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs, None);
         let (finish, _) = finish_and_end_ticks(&events);
 
         // Invariant: FINISH is strictly between two tempo entries.
@@ -1710,7 +1856,7 @@ mod tests {
             "tempo synthesis must include the mine's beat as max_chart_beat"
         );
 
-        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs);
+        let (events, tempo_pairs) = synthesize_events(&song, &initial_pairs, None);
         let (finish, end) = finish_and_end_ticks(&events);
 
         // last_measure = ((mine_tick + 4095) / 4096) * 4096

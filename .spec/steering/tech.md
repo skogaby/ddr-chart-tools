@@ -68,6 +68,7 @@ This tool has no external integrations. Everything is local file I/O. No network
 ## Common Technical Gotchas
 
 - **SSQ endianness and alignment**: little-endian throughout, all chunks dword-aligned, but the freeze-info block inside step chunks is 2-byte aligned. Don't assume everything is 4-byte aligned.
+- **A source SSQ's END is trusted over its tempo chunk**: `DDR_LEGACY → DDR` keeps the source's END event (code 2, arg 4) and cuts or extends the tempo pairs to it, rather than ending at the last tempo pair. Tempo chunks can run far past the song: HOTTEST PARTY 5's licensed short cuts carry the full song's tempo, which would otherwise leave minutes of silence after the cut. Only sources without a usable END (none, or at/before tick 8192) fall back to last note + 2 measures.
 - **SSQ TPS is per-file**: the tempo chunk's `param2` is the tick rate. Don't hardcode 1000. Observed values are 1000, 150, and 75; any positive `u16` is legal.
 - **Legacy `time_offset[0]` is not always 0**: it encodes an origin-shift between the chart timeline and the audio-sync timeline. The parser accepts any value; modernization normalizes to 0 and rescales seconds-ticks accordingly.
 - **SSQ chunk lookup has two sentinels**: `length == 0` and `param2 == 0xFFFF` both terminate chunk scans. Writers must not emit either value spuriously.
